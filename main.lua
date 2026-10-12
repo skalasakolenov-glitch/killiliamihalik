@@ -2380,7 +2380,7 @@ local function DoAim(cmd, ply)
 
     -- a record from the past: the shot carries that tick, so the server aims at that moment
     lastAimBT = nil
-    if aimTick and (shooting or autoFire) then
+    if aimTick and (shooting or autoFire) and cmd.SetTickCount then
         cmd:SetTickCount(aimTick)
         lastAimBT = (engine.TickCount() - aimTick) * engine.TickInterval() * 1000
     end
@@ -2618,7 +2618,7 @@ local function DoRage(cmd, ply)
 
     -- a record from the past: the shot carries that tick, so the server aims at that moment
     lastAimBT = nil
-    if bestTick then
+    if bestTick and cmd.SetTickCount then
         cmd:SetTickCount(bestTick)
         lastAimBT = (engine.TickCount() - bestTick) * engine.TickInterval() * 1000
     end
@@ -2782,6 +2782,11 @@ end
 -- The server clamps the rate to sv_mincmdrate / sv_maxcmdrate, and it only clumps when there
 -- are more frames than packets. The original value is put back when neither wants it (and
 -- on Unload); the item bag spam has its own cl_cmdrate use and wins while it runs.
+
+-- item bag spam state; declared here because the Think hook below checks BAG.rate
+-- (declared further down it was a nil global inside that hook)
+local BAG = {flip = false, rate = nil, orig = nil}
+
 do
     local orig, applied = nil, nil
     local jitterFlip, jitterNext = false, 0
@@ -3018,7 +3023,7 @@ local TrackShots   -- assigned in the tracer block further down
 --           on the bag before the server has got round to removing it (entity removal is only
 --           carried out when the frame ends). Whether that gives anything depends entirely on how
 --           the server's bag code is written.
-local BAG = {flip = false, rate = nil, orig = nil}
+-- (BAG itself is declared above the cl_cmdrate manager, which reads BAG.rate)
 
 -- value for cl_cmdrate (a string), or nil to put the original back. (fps_max is on GMod's blocked
 -- list for RunConsoleCommand; every set goes through pcall so a refused command never throws.)
