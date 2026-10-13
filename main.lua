@@ -308,7 +308,6 @@ local cfg = {
         burstRate = 10,            -- cl_cmdrate while bursting
         netCount  = 10,            -- net mode: gRust.Interact messages sent in one frame
         netWait   = 1.0,           -- net mode: seconds before the same bag gets another burst
-        doorDupe  = false,         -- V: gRust.ToggleDoor at every bag
     },
     netlog = {                     -- logs the net messages you send (to see what a menu really sends)
         enabled  = false,
@@ -4059,21 +4058,6 @@ function BAG.NetRun(ply)
         end
     end
 end
-
--- door-toggle dupe
-hook.Add("PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂", function(ply, button)
-    if not cfg.bagspam.doorDupe then return end
-    if button == KEY_V then
-        for _, bag in pairs(ents.FindByClass("rust_itembag")) do
-            if IsValid(bag) then
-                net.Start("gRust.ToggleDoor")
-                    net.WriteEntity(bag)
-                net.SendToServer()
-            end
-        end
-    end
-end)
-addedHooks[#addedHooks + 1] = {"PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂"}
 
 -- nyx_interact_burst [n]: one burst at whatever you are looking at, any class (for testing)
 concommand.Add("nyx_interact_burst", function(ply, cmd, args)
@@ -13670,7 +13654,6 @@ local function BuildMenu()
             AddLabel(p, "Class: console  nyx_bag_class <class>")
             AddLabel(p, "(default rust_itembag)")
         end)
-        AddCheck(g, "Door-toggle dupe (V)", bs, "doorDupe")
         EndGroup(g)
 
         local nl, log = cfg.netlog, BAG.Log
