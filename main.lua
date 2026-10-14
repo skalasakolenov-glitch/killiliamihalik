@@ -102,6 +102,24 @@ local cfg = {
         -- it uses the texture bug's search settings above
         wallhang    = false,       -- bind it: hold
         whApproach  = 6,           -- closes in on a wall up to this many units off the hull
+        -- pixel surf (lobotomy's auto align + pixel_surf): bind it: hold
+        pixelsurf   = false,
+        psAlign     = true,        -- press onto the lip / keep the surf with your keys (auto align)
+        psGain      = true,        -- surfing above 250 u/s: the press that keeps it and gains speed
+        psTicks     = 8,           -- ticks ahead the duck / stand check looks for the surf
+        -- pixel finder (lobotomy): where you can pixel surf, drawn on the walls
+        psFinder    = true,
+        psfKey      = KEY_N,       -- hold: mark a line on a wall, let go: scan it
+        psfLive     = false,       -- scan the wall under the crosshair by itself
+        psfRange    = 64,          -- live: units above / below where you look
+        psfInset    = 0.02197,     -- how deep the hull sits in the wall (16 - 15.97803)
+        psCalc      = true,        -- pixel surf calculator for the lip you look at
+        psCalcHud   = true,        -- its panel next to the crosshair
+        psCalcKey   = KEY_NONE,    -- hold on the ground: do the first jump that catches the lip
+        -- lobotomy's jumps (bind them: hold)
+        minijump    = false,       -- jump + duck the tick you walk off an edge
+        mjHoldDuck  = false,       -- keep the duck until landing
+        longjump    = false,       -- duck on the jump and the first two ticks in the air
         -- module: no packet goes out, so the server stops simulating you where you are
         airstuck    = false,       -- bind it: hold
         asMax       = 4,           -- seconds at most (then it lets go until pressed again)
@@ -158,12 +176,8 @@ local cfg = {
     interp = {
         mode = "default",          -- default | low | off | smooth
     },
-    nospread = {                   -- default HL2 weapons only (pistol, smg1, ar2)
+    nospread = {                   -- gadik.es' nospread: engine spread table x the weapon's cone
         enabled    = false,
-        seedOffset = 0,            -- added to the low byte of the prediction seed (+1 is the usual variant)
-        scale      = 1,            -- multiplies the weapon's cone, for tuning
-        bases      = false,        -- SWB / CW 2.0 too (ak47hack's way, experimental: seeded by the
-                                   -- command number, which only matches if the base does the same)
     },
     norecoil = {                   -- your own shots (the aimbots have their own recoil setting)
         enabled    = false,        -- the view punch taken off the sent angle on shot ticks
@@ -518,6 +532,15 @@ local cfg = {
         enabled = true,
         xPct    = 1,
         yPct    = 22,
+    },
+    media = {                      -- media player: what Windows plays (Chrome, Spotify, ...), needs gmcl_nyx v2
+        enabled  = false,
+        x = -1, y = -1,            -- pixels, -1 = top centre
+        w = 420, h = 96,           -- dragged with the corner while the cursor is out
+        cover    = true,
+        app      = true,           -- the app's name in the corner
+        autoHide = true,           -- gone while nothing plays (unless the cursor is out)
+        opacity  = 90,             -- %
     },
     bg = {                         -- animated picture behind the menu
         enabled = false,           -- off until switched on (or a picture is picked) in the menu
@@ -2461,6 +2484,596 @@ do
     local WH = {status = "idle"}
     MV.WH = WH
 
+    -- pixel surf ------------------------------------------------------------------------
+    -- Port of lobotomy's pixel surf: its auto align + pixel_surf, with the engine prediction
+    -- replaced by SimTick. A pixel surf is the hull's bottom edge riding a one-unit lip on a
+    -- wall: every tick the fall is clipped away and ends at -half gravity, so you slide along.
+    --
+    -- Align (every tick in the air, against a vertical wall the hull touches within a unit):
+    --   * presses straight into the wall of 0, 10 .. 90 are simulated and the first that ends
+    --     the tick at -half gravity is used (pressed onto the lip); none: a press of 10
+    --   * your own keys are given back while the origin isn't within 0.0075 .. 0.03125 of a
+    --     whole unit on x or y (brushes sit on the grid: only that close is the hull at a lip)
+    --     and you aren't surfing yet
+    --   * surfing with one move key held toward a wall: the strongest press of that key
+    --     (0 .. 405) that stays at -half gravity, and above 250 u/s the press at 15 / 20 / 25
+    --     "ideal" degrees off the wall that keeps the surf and gains the most speed
+    -- Duck (lobotomy's pixel_surf): with the keys as they are now, `psTicks` ticks are
+    -- simulated standing; if the surf comes on its own nothing changes. If not, ducked: when
+    -- that catches it, duck is held from now on until the surf is over (16 ticks of grace).
+    -- Everything lives in PS (functions too): this block is close to the local limit.
+    local PS = {status = "idle", scan = 0, duck = false, untilTick = 0}
+    MV.PS = PS
+
+    -- a vertical wall the hull touches within one unit (16 directions, the last hit first)
+    function PS.Wall(ply, pos, mins, maxs)
+        local step = math.pi * 2 / 16
+
+        for n = 0, 15 do
+            local a = (PS.scan + n * step) % (math.pi * 2)
+            local t = TraceXYZ(ply, pos.x, pos.y, pos.z, pos.x + math.cos(a), pos.y + math.sin(a), pos.z, mins, maxs)
+
+            if t.Hit and t.Fraction < 1 and not t.StartSolid and math.abs(t.HitNormal.z) < 0.001 then
+                PS.scan = a
+                return t.HitNormal.x, t.HitNormal.y, t.HitPos.z
+            end
+        end
+
+        PS.scan = 0
+    end
+
+    -- origin within 0.0075 .. 0.03125 of a whole unit on x or y
+    function PS.NearGrid(pos)
+        for _, v in ipairs({pos.x, pos.y}) do
+            local f = v - math.floor(v)
+            if (f >= 0.0075 and f <= 0.03125) or (1 - f >= 0.0075 and 1 - f <= 0.03125) then return true end
+        end
+        return false
+    end
+
+    -- one tick from `base` with these keys: the sim, or nil when it didn't stay in the air
+    function PS.Tick(base, duck, fm, sm, view)
+        local s = CloneSim(base)
+        if SimTick(s, duck, fm, sm, view) ~= "air" then return nil end
+        return s
+    end
+
+    -- the keys held for up to `ticks` ticks reach the surf (-half gravity in the air)
+    function PS.Reaches(base, duck, fm, sm, view, ticks, target)
+        local s = CloneSim(base)
+        for k = 1, ticks do
+            if SimTick(s, duck, fm, sm, view) ~= "air" then return nil end
+            if AtTarget(s.vz, target) then return k end
+        end
+    end
+
+    function PS.Run(cmd, ply, onGround, vz)
+        local m = cfg.move
+        if not m.pixelsurf then
+            PS.status, PS.duck = "idle", false
+            return false
+        end
+
+        if onGround then
+            PS.status, PS.duck = "on the ground", false
+            return false
+        end
+
+        local target = Target(ply)
+        local now = engine.TickCount()
+        local surfing = AtTarget(vz, target)
+        local view = realAng.y
+        local pos, mins, maxs = ply:GetPos(), ply:OBBMins(), ply:OBBMaxs()
+        local acted = false
+
+        -- the duck lobotomy holds once it found the surf (before anything is simulated, so
+        -- the simulations below run on the duck state that will really be sent)
+        if PS.duck then
+            if now > PS.untilTick and not surfing then
+                PS.duck = false
+            else
+                cmd:AddKey(IN_DUCK)
+                acted = true
+            end
+        end
+
+        local nx, ny = PS.Wall(ply, pos, mins, maxs)
+        if not nx then
+            PS.status = PS.duck and "holding duck" or "no wall"
+            return acted
+        end
+
+        local base = NewSim(ply)
+        local duck = cmd:KeyDown(IN_DUCK)
+        local ownFm, ownSm = cmd:GetForwardMove(), cmd:GetSideMove()
+        local intoYaw = math.deg(math.atan2(-ny, -nx))
+
+        -- align ------------------------------------------------------------------------
+        if m.psAlign then
+            local fm, sm = KeysToward(intoYaw, 10)
+            local pinned = false
+
+            for mult = 0, 90, 10 do
+                local f2, s2 = KeysToward(intoYaw, mult)
+                local s = PS.Tick(base, duck, f2, s2, view)
+                if s and AtTarget(s.vz, target) then
+                    fm, sm, pinned = f2, s2, true
+                    break
+                end
+            end
+
+            -- away from the grid and not surfing yet: your keys stay yours
+            if not PS.NearGrid(pos) and not surfing and (ownFm ~= 0 or ownSm ~= 0) then
+                fm, sm = ownFm, ownSm
+            end
+
+            -- surfing with one move key: keep it from knocking you off, and gain speed
+            if surfing then
+                local keys = {
+                    {IN_FORWARD, 0}, {IN_BACK, 180}, {IN_MOVELEFT, 90}, {IN_MOVERIGHT, -90},
+                }
+                local held, keyYaw = 0, nil
+                for _, k in ipairs(keys) do
+                    if cmd:KeyDown(k[1]) then
+                        held = held + 1
+                        keyYaw = view + k[2]
+                    end
+                end
+
+                if held == 1 then
+                    -- a wall that way (128 units, at the hull's height)
+                    local r = math.rad(keyYaw)
+                    local tl = util.TraceLine({
+                        start = pos + Vector(0, 0, 1), endpos = pos + Vector(math.cos(r) * 128, math.sin(r) * 128, 1),
+                        filter = ply, mask = MASK_PLAYERSOLID,
+                    })
+
+                    if tl.Hit then
+                        -- the strongest press of that key that stays on the surf
+                        for i = 0, 405, 45 do
+                            local f2, s2 = KeysToward(keyYaw, i)
+                            local s = PS.Tick(base, duck, f2, s2, view)
+                            if s and AtTarget(s.vz, target) then fm, sm = f2, s2 end
+                        end
+
+                        -- fast: the angle off the wall that keeps the surf and gains the most
+                        local speed = math.sqrt(base.vx * base.vx + base.vy * base.vy)
+                        if m.psGain and speed > 250 then
+                            local velYaw = math.deg(math.atan2(base.vy, base.vx))
+                            local sign = math.NormalizeAngle(velYaw - intoYaw) >= 0 and 1 or -1
+                            local bestGain = 0
+
+                            for _, angle in ipairs({15, 20, 25}) do
+                                local ideal = math.deg(math.atan(angle / speed))
+                                local f2, s2 = KeysToward(intoYaw + sign * ideal, 450)
+                                local s = PS.Tick(base, duck, f2, s2, view)
+
+                                if s and AtTarget(s.vz, target) then
+                                    local gain = math.sqrt(s.vx * s.vx + s.vy * s.vy) - speed
+                                    if gain > bestGain then bestGain, fm, sm = gain, f2, s2 end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            cmd:SetForwardMove(fm)
+            cmd:SetSideMove(sm)
+            acted = true
+            PS.status = surfing and "surfing" or (pinned and "aligned on a lip" or "aligning")
+        end
+
+        -- duck -------------------------------------------------------------------------
+        if not PS.duck and not surfing then
+            local ticks = math.Clamp(math.floor(m.psTicks), 1, 16)
+            local fm, sm = cmd:GetForwardMove(), cmd:GetSideMove()
+
+            if PS.Reaches(base, false, fm, sm, view, ticks, target) then
+                PS.status = "surf comes standing"
+            else
+                local k = PS.Reaches(base, true, fm, sm, view, ticks, target)
+                if k then
+                    PS.duck, PS.untilTick = true, now + k + 16
+                    cmd:AddKey(IN_DUCK)
+                    acted = true
+                    PS.status = string.format("duck: surf in %d", k)
+                elseif not m.psAlign then
+                    PS.status = "wall, no surf in reach"
+                end
+            end
+        end
+
+        return acted
+    end
+
+    -- pixel finder (lobotomy) ----------------------------------------------------------
+    -- Where a pixel surf is possible. Hold the finder key looking at a wall: that spot is the
+    -- start, looking up / down stretches a vertical line along the wall; let go and every
+    -- whole unit of the line is tried the way lobotomy does it: the hull put against the wall
+    -- `psfInset` deep (15.97803 off the point: the trace's epsilon still lets it touch from
+    -- there; just outside when that starts solid), its bottom 0.0287 above the unit, falling
+    -- from rest with a press of 10 into the wall, one tick simulated. A tick that ends at
+    -- -half gravity means a lip at that height you can surf on. Lips are drawn as lines along
+    -- the wall - green standing, cyan only with the ducked hull - until the next scan or Clear.
+    -- "Live" does the same by itself for the wall under the crosshair, +-psfRange around where
+    -- you look, four times a second.
+    PS.points = {}
+    PS.fstatus = "idle"
+
+    function PS.AimTrace(ply)
+        local eye = ply:EyePos()
+        return util.TraceLine({start = eye, endpos = eye + realAng:Forward() * 6000, filter = ply, mask = MASK_PLAYERSOLID})
+    end
+
+    -- one height: the hull sunk `inset` into the wall at (px, py), bottom just over z
+    function PS.Lip(base, px, py, z, sx, sy, duck, inset, intoYaw, target)
+        local hw = (duck and base.dMax or base.sMax).x
+        local s = CloneSim(base)
+        s.x, s.y, s.z = px + sx * (hw - inset), py + sy * (hw - inset), z + 0.0287018
+        s.vx, s.vy, s.vz = 0, 0, 0
+        s.onGround, s.ducked = false, duck
+
+        local r = SimTick(s, duck, 10, 0, intoYaw)
+        if r == "stuck" then return nil end
+        return r == "air" and AtTarget(s.vz, target)
+    end
+
+    -- every whole unit from z0 to z1 (at most 512) on the wall at px, py with normal nx, ny
+    function PS.Scan(ply, px, py, z0, z1, nx, ny)
+        local out = {}
+        local m = cfg.move
+        local target = Target(ply)
+        local base = NewSim(ply)
+        local sx = nx > 0.01 and 1 or (nx < -0.01 and -1 or 0)
+        local sy = ny > 0.01 and 1 or (ny < -0.01 and -1 or 0)
+        local intoYaw = math.deg(math.atan2(-ny, -nx))
+        local lo, hi = math.floor(math.min(z0, z1)), math.floor(math.max(z0, z1))
+        if hi - lo > 512 then lo = hi - 512 end
+
+        for z = hi, lo, -1 do
+            for _, duck in ipairs({false, true}) do
+                local hit = PS.Lip(base, px, py, z, sx, sy, duck, m.psfInset, intoYaw, target)
+                if hit == nil then hit = PS.Lip(base, px, py, z, sx, sy, duck, -0.001, intoYaw, target) end
+
+                if hit then
+                    out[#out + 1] = {x = px, y = py, z = z, nx = nx, ny = ny, duck = duck}
+                    break
+                end
+            end
+        end
+
+        return out
+    end
+
+    function PS.Finder(ply)
+        local m = cfg.move
+        if not m.psFinder then
+            PS.line = nil
+            return
+        end
+
+        if m.psfKey and m.psfKey > 0 and IsBindDown(m.psfKey) then
+            local tr = PS.AimTrace(ply)
+            if not PS.line then
+                if tr.Hit and math.abs(tr.HitNormal.z) < 0.7 then
+                    PS.line = {x = tr.HitPos.x, y = tr.HitPos.y, z0 = tr.HitPos.z, z1 = tr.HitPos.z, nx = tr.HitNormal.x, ny = tr.HitNormal.y}
+                    PS.fstatus = "marking the line"
+                end
+            elseif tr.Hit then
+                PS.line.z1 = tr.HitPos.z        -- straight up / down over the start
+            end
+        elseif PS.line then
+            local l = PS.line
+            PS.line = nil
+            PS.points = PS.Scan(ply, l.x, l.y, l.z0, l.z1, l.nx, l.ny)
+            PS.fstatus = string.format("%d lips in %d units", #PS.points, math.floor(math.abs(l.z1 - l.z0)) + 1)
+        end
+
+        if m.psfLive and not PS.line and RealTime() >= (PS.nextLive or 0) then
+            PS.nextLive = RealTime() + 0.25
+            local tr = PS.AimTrace(ply)
+
+            if tr.Hit and math.abs(tr.HitNormal.z) < 0.7 and tr.HitPos:DistToSqr(ply:EyePos()) < 1500 * 1500 then
+                local r = math.Clamp(m.psfRange, 8, 256)
+                PS.points = PS.Scan(ply, tr.HitPos.x, tr.HitPos.y, tr.HitPos.z - r, tr.HitPos.z + r, tr.HitNormal.x, tr.HitNormal.y)
+                PS.fstatus = string.format("live: %d lips", #PS.points)
+            end
+        end
+    end
+
+    function MV.PSFinderStatus()
+        return PS.fstatus
+    end
+
+    function MV.PSClear()
+        PS.points, PS.line = {}, nil
+        PS.fstatus = "cleared"
+    end
+
+    AddHook("PostDrawTranslucentRenderables", "pixelfinder", function(depth, sky)
+        if sky or IsHidden() or not cfg.move.psFinder then return end
+
+        local l = PS.line
+        if l then
+            render.DrawLine(Vector(l.x, l.y, l.z0), Vector(l.x, l.y, l.z1), Color(255, 255, 255), false)
+        end
+
+        for _, p in ipairs(PS.points) do
+            local len = math.sqrt(p.nx * p.nx + p.ny * p.ny)
+            if len > 0 then
+                local nx, ny = p.nx / len, p.ny / len
+                local tx, ty = -ny, nx
+                local cx, cy = p.x + nx * 0.5, p.y + ny * 0.5
+                local col = p.duck and Color(90, 200, 255) or Color(149, 184, 6)
+                if PS.calc and PS.calc.lip == p then col = Color(255, 220, 60) end     -- the calculator's lip
+
+                render.DrawLine(Vector(cx + tx * 16, cy + ty * 16, p.z), Vector(cx - tx * 16, cy - ty * 16, p.z), col, false)
+                render.DrawLine(Vector(cx, cy, p.z), Vector(cx + nx * 6, cy + ny * 6, p.z), col, false)
+            end
+        end
+    end)
+
+    -- pixel surf calculator ------------------------------------------------------------
+    -- For the lip you look at (a finder line, the one nearest the crosshair), whether a jump
+    -- from the ground you stand on gets you onto it, and on which tick. lobotomy's assist does
+    -- this with a parabola and a ~0.02 window plus CS:GO's duck offsets (+9); here the
+    -- parabola is built tick by tick (half gravity before and after every move, the duck
+    -- lifting the feet by the hull difference the moment it goes in, in the air) and every
+    -- falling tick of it is tried against the lip the way the finder found it: the hull at
+    -- the wall at that tick's height and speed, one tick simulated, -half gravity = caught.
+    -- So it needs no window of its own and uses the same physics as the finder.
+    -- The jump tick is calibrated from your own jumps: after each one the speed and rise it
+    -- really gave are kept and used from then on (GMod's order of gravity / jump on that tick
+    -- isn't exactly SDK 2013's).
+    -- Variants: jump, jump + duck in the air (long / mini jump), crouch jump (already ducked),
+    -- and while in the air: "falling now" from where you are. With the auto key held on the
+    -- ground, the first variant that catches is done for you.
+    PS.calc = nil
+
+    -- learn the jump tick from a real jump: ground z / tick kept while on the ground, read
+    -- back on the first tick in the air
+    function PS.Learn(ply, onGround, vz)
+        local now = engine.TickCount()
+        if onGround then
+            PS.groundZ, PS.groundTick = ply:GetPos().z, now
+            return
+        end
+
+        if PS.groundTick == now - 1 and vz > 0 then
+            local hg = Target(ply) * -1
+            local dz = ply:GetPos().z - PS.groundZ
+            PS.jumpVz = vz + 2 * hg                       -- the model: after the tick vz = jp - 2hg
+            PS.jumpDz = dz                                -- and the rise on that tick
+        end
+    end
+
+    -- start-of-tick states after a jump from z0; duckAt = air tick the duck goes in (0 = ducked
+    -- on the ground already, nil = never)
+    function PS.Path(base, z0, duckAt, ticks, ply)
+        local hg = base.g * 0.5 * base.dt
+        local jp = PS.jumpVz or ply:GetJumpPower()
+        local z = z0 + (PS.jumpDz or (jp - hg) * base.dt)
+        local vz = jp - 2 * hg
+        local ducked = duckAt == 0
+        local out = {}
+
+        for k = 1, ticks do
+            if duckAt and duckAt >= 1 and k == duckAt and not ducked then
+                z, ducked = z + base.delta, true
+            end
+            out[k] = {z = z, vz = vz, ducked = ducked}
+
+            local v = vz - hg
+            z = z + v * base.dt
+            vz = v - hg
+        end
+
+        return out
+    end
+
+    -- the same from where you are now in the air
+    function PS.PathNow(base, ticks)
+        local hg = base.g * 0.5 * base.dt
+        local z, vz = base.z, base.vz
+        local out = {}
+
+        for k = 1, ticks do
+            out[k] = {z = z, vz = vz, ducked = base.ducked}
+            local v = vz - hg
+            z = z + v * base.dt
+            vz = v - hg
+        end
+
+        return out
+    end
+
+    -- first tick of the path that catches the lip p, or nil
+    function PS.Catch(base, path, p, target)
+        local sx = p.nx > 0.01 and 1 or (p.nx < -0.01 and -1 or 0)
+        local sy = p.ny > 0.01 and 1 or (p.ny < -0.01 and -1 or 0)
+        local intoYaw = math.deg(math.atan2(-p.ny, -p.nx))
+        local hg = base.g * 0.5 * base.dt
+
+        for k, st in ipairs(path) do
+            -- only ticks that move down and start within reach of the lip
+            if st.vz - hg < 0 and st.z >= p.z - 0.5 and st.z <= p.z + 48 then
+                for _, inset in ipairs({cfg.move.psfInset, -0.001}) do
+                    local hw = (st.ducked and base.dMax or base.sMax).x
+                    local s = CloneSim(base)
+                    s.x, s.y, s.z = p.x + sx * (hw - inset), p.y + sy * (hw - inset), st.z
+                    s.vx, s.vy, s.vz = 0, 0, st.vz
+                    s.onGround, s.ducked = false, st.ducked
+
+                    local r = SimTick(s, st.ducked, 10, 0, intoYaw)
+                    if r ~= "stuck" then
+                        if r == "air" and AtTarget(s.vz, target) then return k end
+                        break
+                    end
+                end
+            end
+
+            if st.z < p.z - 1 then return nil end      -- fell past it
+        end
+    end
+
+    -- the finder lip closest to where you look (within 20 degrees)
+    function PS.AimedLip(ply)
+        local eye, fwd = ply:EyePos(), realAng:Forward()
+        local best, bestDot = nil, math.cos(math.rad(20))
+
+        for _, p in ipairs(PS.points) do
+            local d = Vector(p.x, p.y, p.z) - eye
+            d:Normalize()
+            local dot = d:Dot(fwd)
+            if dot > bestDot then best, bestDot = p, dot end
+        end
+
+        return best
+    end
+
+    PS.VARIANTS = {
+        {name = "jump", duckAt = nil, keys = "jump"},
+        {name = "jump + duck (long / mini)", duckAt = 1, keys = "jump+duck"},
+        {name = "crouch jump", duckAt = 0, keys = "crouch"},
+    }
+
+    function PS.Calc(cmd, ply, onGround)
+        local m = cfg.move
+        if not (m.psFinder and m.psCalc) or #PS.points == 0 then
+            PS.calc = nil
+            return
+        end
+
+        local now = RealTime()
+        if now >= (PS.nextCalc or 0) then
+            PS.nextCalc = now + 0.1
+
+            local lip = PS.AimedLip(ply) or (PS.calc and PS.calc.lip)
+            if lip then
+                local base = NewSim(ply)
+                local target = Target(ply)
+                local rows = {}
+
+                if onGround or PS.groundZ then
+                    local z0 = onGround and ply:GetPos().z or PS.groundZ
+                    for _, v in ipairs(PS.VARIANTS) do
+                        local k = PS.Catch(base, PS.Path(base, z0, v.duckAt, 160, ply), lip, target)
+                        rows[#rows + 1] = {name = v.name, tick = k, v = v}
+                    end
+                end
+
+                if not onGround then
+                    local k = PS.Catch(base, PS.PathNow(base, 160), lip, target)
+                    table.insert(rows, 1, {name = "falling now", tick = k})
+                end
+
+                local z0 = onGround and ply:GetPos().z or (PS.groundZ or ply:GetPos().z)
+                PS.calc = {lip = lip, rows = rows, height = lip.z - z0}
+            else
+                PS.calc = nil
+            end
+        end
+
+        -- auto: on the ground with the key held, the first variant that catches is done
+        local key = m.psCalcKey
+        if PS.autoDuckUntil and engine.TickCount() <= PS.autoDuckUntil then cmd:AddKey(IN_DUCK) end
+
+        if onGround and PS.calc and key and key > 0 and IsBindDown(key) then
+            for _, r in ipairs(PS.calc.rows) do
+                if r.tick and r.v then
+                    if r.v.keys == "jump" then
+                        cmd:AddKey(IN_JUMP)
+                        cmd:RemoveKey(IN_DUCK)
+                    elseif r.v.keys == "jump+duck" then
+                        cmd:AddKey(IN_JUMP)
+                        cmd:AddKey(IN_DUCK)
+                        PS.autoDuckUntil = engine.TickCount() + r.tick + 4
+                    elseif ply:Crouching() then
+                        cmd:AddKey(IN_JUMP)
+                        cmd:AddKey(IN_DUCK)
+                        PS.autoDuckUntil = engine.TickCount() + r.tick + 4
+                    else
+                        cmd:AddKey(IN_DUCK)                -- crouch first, jump once ducked
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    function MV.PSCalcStatus()
+        if not PS.calc then return #PS.points == 0 and "find lips first" or "look at a lip" end
+        local n = 0
+        for _, r in ipairs(PS.calc.rows) do if r.tick then n = n + 1 end end
+        return string.format("lip %+.1fu: %d way%s", PS.calc.height, n, n == 1 and "" or "s")
+    end
+
+    AddHook("HUDPaint", "pixelcalc", function()
+        local c = PS.calc
+        if not c or IsHidden() or not cfg.move.psCalcHud then return end
+
+        local x, y = ScrW() / 2 + 60, ScrH() / 2 + 30
+        local w, h = 230, 22 + #c.rows * 15
+
+        surface.SetDrawColor(13, 13, 13, 220)
+        surface.DrawRect(x, y, w, h)
+        surface.SetDrawColor(50, 50, 50, 255)
+        surface.DrawOutlinedRect(x, y, w, h, 1)
+
+        draw.SimpleText(string.format("pixel surf  %+.2fu", c.height), "NyxUIBold", x + 8, y + 5, Color(255, 255, 255))
+
+        for i, r in ipairs(c.rows) do
+            local ok = r.tick ~= nil
+            local col = ok and Color(149, 184, 6) or Color(110, 110, 110)
+            local ry = y + 6 + i * 15
+            draw.SimpleText(r.name, "NyxUI", x + 8, ry, col)
+            draw.SimpleText(ok and ("tick " .. r.tick) or "no", "NyxUI", x + w - 8, ry, col, TEXT_ALIGN_RIGHT)
+        end
+    end)
+
+    -- mini jump / long jump (lobotomy) -------------------------------------------------
+    -- long jump: ducks on the tick you jump and the first two ticks in the air (lobotomy ducks
+    -- while the predicted flags say the ground was left at most 2 ticks ago; the jump tick
+    -- itself is caught by IN_JUMP on the ground, the simulation doesn't model jumping).
+    -- mini jump: on the tick the simulation walks you off the edge, jump + duck right there;
+    -- with "hold duck" the duck stays until you land.
+    function PS.Jumps(cmd, ply, onGround)
+        local m = cfg.move
+        local now = engine.TickCount()
+
+        if m.longjump then
+            if onGround then
+                PS.ljGround = now
+                if cmd:KeyDown(IN_JUMP) then cmd:AddKey(IN_DUCK) end
+            elseif now - (PS.ljGround or -100) <= 2 then
+                cmd:AddKey(IN_DUCK)
+            end
+        end
+
+        if not m.minijump then
+            PS.mjDuck = false
+            return
+        end
+
+        if onGround then
+            PS.mjDuck = false
+            local s = NewSim(ply)
+            if SimTick(s, cmd:KeyDown(IN_DUCK), cmd:GetForwardMove(), cmd:GetSideMove(), realAng.y) == "air" then
+                cmd:AddKey(IN_JUMP)
+                cmd:AddKey(IN_DUCK)
+                PS.mjDuck = m.mjHoldDuck
+            end
+        elseif PS.mjDuck then
+            cmd:AddKey(IN_DUCK)
+        end
+    end
+
+    function MV.PSStatus()
+        return PS.status
+    end
+
+
     local function RunTextureBug(cmd, ply, onGround, vz)
         if not cfg.move.texturebug then
             TB.status, TB.last = "idle", nil
@@ -2583,6 +3196,8 @@ do
         if MV.lastYaw then MV.yawRate = math.NormalizeAngle(yaw - MV.lastYaw) end
         MV.lastYaw = yaw
 
+        PS.Finder(ply)                   -- works on the ground and on ladders too
+
         if ply:GetMoveType() ~= MOVETYPE_WALK or ply:WaterLevel() > 1 or ply:InVehicle() then
             MV.plan, MV.duckHold, MV.preview, MV.lines = nil, false, nil, nil
             MV.prevVz, MV.prevAt = 0, false
@@ -2592,6 +3207,10 @@ do
         local onGround = ply:IsOnGround()
         local vz = ply:GetVelocity().z
         local target = Target(ply)
+
+        PS.Jumps(cmd, ply, onGround)
+        PS.Learn(ply, onGround, vz)
+        PS.Calc(cmd, ply, onGround)
 
         -- a real edge bug: at the signature after a faster fall, still in the air (+hg too:
         -- the texture bug can come out on that side)
@@ -2623,7 +3242,7 @@ do
         MV.prevVz, MV.prevAt = vz, at
 
         -- texture bug first: when it set the keys it owns the tick
-        if RunWallHang(cmd, ply, onGround, vz) or RunTextureBug(cmd, ply, onGround, vz) then
+        if RunWallHang(cmd, ply, onGround, vz) or PS.Run(cmd, ply, onGround, vz) or RunTextureBug(cmd, ply, onGround, vz) then
             MV.plan, MV.lines, MV.preview = nil, nil, nil
             return
         end
@@ -2713,7 +3332,8 @@ do
         -- while still hanging, how long so far
         local text = MV.flashText
         if tb and MV.atRun >= MV.tbMinHold then
-            text = string.format("%s %.1fs", cfg.move.wallhang and "wallhang" or "texturebug", CurTime() - MV.runStart)
+            text = string.format("%s %.1fs", cfg.move.wallhang and "wallhang" or "texturebug",
+                CurTime() - MV.runStart)
         end
 
         draw.SimpleTextOutlined(text, "NyxKillFxSmall", ScrW() / 2, y, col,
@@ -2828,22 +3448,92 @@ local function AimAngleTo(ply, pos, recoilOn, recoil)
 end
 
 -- ---------------------------------------------------------------------------
--- no spread for the default HL2 weapons
---   The native weapons (weapon_pistol, weapon_smg1, weapon_ar2) get their bullet spread from
---   Valve's seeded random stream, seeded with the prediction seed of the command the shot is in
---   (MD5_PseudoRandom of the command number, low byte). That makes the offset of this very shot
---   computable here, and the view angle is rotated against it on the shot tick (sent silently,
---   like the aimbot's angle). .357 / crossbow / rpg are exact already; the shotgun fires several
---   pellets with a seed each, which one view angle cannot align, so it is left alone.
+-- no spread (port of gadik.es' PredictSpread)
+--   FireBullets weapons: the shot's offset comes from a table of the engine's spread for every
+--   prediction seed (0..255, engineSpread), the seed being MD5_PseudoRandom(command number) &
+--   255 - gadik computes that with its own Lua MD5, util.MD5 here gives the same byte. The cone
+--   is the weapon's own, learned from EntityFireBullets per class (HL2 defaults until then);
+--   the pistol's grows with its accuracy penalty. The aim angle becomes
+--   (forward - x * cone.x * right - y * cone.y * up):Angle().
+--   CW 2.0 / SWB: the base's cone (CurCone, or SWB's HipSpread / AimSpread), seeded with the
+--   command number, taken off * 25. VGUNS: their own spread prediction, undone.
 -- ---------------------------------------------------------------------------
 
 local NS = {
-    cones = {                       -- tangent of the cone, like VECTOR_CONE_xDEGREES
-        weapon_pistol = 0.00873,    -- 1 degree
-        weapon_smg1   = 0.04362,    -- 5 degrees
-        weapon_ar2    = 0.02618,    -- 3 degrees
-    },
     status = "idle",
+    engineSpread = {
+        [0] = {-0.492036, 0.286111}, [1] = {-0.492036, 0.286111}, [2] = {-0.255320, 0.128480}, [3] = {0.456165, 0.356030},
+        [4] = {-0.361731, 0.406344}, [5] = {-0.146730, 0.834589}, [6] = {-0.253288, -0.421936}, [7] = {-0.448694, 0.111650},
+        [8] = {-0.880700, 0.904610}, [9] = {-0.379932, 0.138833}, [10] = {0.502579, -0.494285}, [11] = {-0.263847, -0.594805},
+        [12] = {0.818612, 0.090368}, [13] = {-0.063552, 0.044356}, [14] = {0.490455, 0.304820}, [15] = {-0.192024, 0.195162},
+        [16] = {-0.139421, 0.857106}, [17] = {0.715745, 0.336956}, [18] = {-0.150103, -0.044842}, [19] = {-0.176531, 0.275787},
+        [20] = {0.155707, -0.152178}, [21] = {-0.136486, -0.591896}, [22] = {-0.021022, -0.761979}, [23] = {-0.166004, -0.733964},
+        [24] = {-0.102439, -0.132059}, [25] = {-0.607531, -0.249979}, [26] = {-0.500855, -0.185902}, [27] = {-0.080884, 0.516556},
+        [28] = {-0.003334, 0.138612}, [29] = {-0.546388, -0.000115}, [30] = {-0.228092, -0.018492}, [31] = {0.542539, 0.543196},
+        [32] = {-0.355162, 0.197473}, [33] = {-0.041726, -0.015735}, [34] = {-0.713230, -0.551701}, [35] = {-0.045056, 0.090208},
+        [36] = {0.061028, 0.417744}, [37] = {-0.171149, -0.048811}, [38] = {0.241499, 0.164562}, [39] = {-0.129817, -0.111200},
+        [40] = {0.007366, 0.091429}, [41] = {-0.079268, -0.008285}, [42] = {0.010982, -0.074707}, [43] = {-0.517782, -0.682470},
+        [44] = {-0.663822, -0.024972}, [45] = {0.058213, -0.078307}, [46] = {-0.302041, -0.132280}, [47] = {0.217689, -0.209309},
+        [48] = {-0.143615, 0.830349}, [49] = {0.270912, 0.071245}, [50] = {-0.258170, -0.598358}, [51] = {0.099164, -0.257525},
+        [52] = {-0.214676, -0.595918}, [53] = {-0.427053, -0.523764}, [54] = {-0.585472, 0.088522}, [55] = {0.564305, -0.533822},
+        [56] = {-0.387545, -0.422206}, [57] = {0.690505, -0.299197}, [58] = {0.475553, 0.169785}, [59] = {0.347436, 0.575364},
+        [60] = {-0.069555, -0.103340}, [61] = {0.286197, -0.618916}, [62] = {-0.505259, 0.106581}, [63] = {-0.420214, -0.714843},
+        [64] = {0.032596, -0.401891}, [65] = {-0.238702, -0.087387}, [66] = {0.714358, 0.197811}, [67] = {0.208960, 0.319015},
+        [68] = {-0.361140, 0.222130}, [69] = {-0.133284, -0.492274}, [70] = {0.022824, -0.133955}, [71] = {-0.100850, 0.271962},
+        [72] = {-0.050582, -0.319538}, [73] = {0.577980, 0.095507}, [74] = {0.224871, 0.242213}, [75] = {-0.628274, 0.097248},
+        [76] = {0.184266, 0.091959}, [77] = {-0.036716, 0.474259}, [78] = {-0.502566, -0.279520}, [79] = {-0.073201, -0.036658},
+        [80] = {0.339952, -0.293667}, [81] = {0.042811, 0.130387}, [82] = {0.125881, 0.007040}, [83] = {0.138374, -0.418355},
+        [84] = {0.261396, -0.392697}, [85] = {-0.453318, -0.039618}, [86] = {0.890159, -0.335165}, [87] = {0.466437, -0.207762},
+        [88] = {0.593253, 0.418018}, [89] = {0.566934, -0.643837}, [90] = {0.150918, 0.639588}, [91] = {0.150112, 0.215963},
+        [92] = {-0.130520, 0.324801}, [93] = {-0.369819, -0.019127}, [94] = {-0.038889, -0.650789}, [95] = {0.490519, -0.065375},
+        [96] = {-0.305940, 0.454759}, [97] = {-0.521967, -0.550004}, [98] = {-0.040366, 0.683259}, [99] = {0.137676, -0.376445},
+        [100] = {0.839301, 0.085979}, [101] = {-0.319140, 0.481838}, [102] = {0.201437, -0.033135}, [103] = {0.384637, -0.036685},
+        [104] = {0.598419, 0.144371}, [105] = {-0.061424, -0.608645}, [106] = {-0.065337, 0.308992}, [107] = {-0.029356, -0.634337},
+        [108] = {0.326532, 0.047639}, [109] = {0.505681, -0.067187}, [110] = {0.691612, 0.629364}, [111] = {-0.038588, -0.635947},
+        [112] = {0.637837, -0.011815}, [113] = {0.765338, 0.563945}, [114] = {0.213416, 0.068664}, [115] = {-0.576581, 0.554824},
+        [116] = {0.246580, 0.132726}, [117] = {0.385548, -0.070054}, [118] = {0.538735, -0.291010}, [119] = {0.609944, 0.590973},
+        [120] = {-0.463240, 0.010302}, [121] = {-0.047718, 0.741086}, [122] = {0.308590, -0.322179}, [123] = {-0.291173, 0.256367},
+        [124] = {0.287413, -0.510402}, [125] = {0.864716, 0.158126}, [126] = {0.572344, 0.561319}, [127] = {-0.090544, 0.332633},
+        [128] = {0.644714, 0.196736}, [129] = {-0.204198, 0.603049}, [130] = {-0.504277, -0.641931}, [131] = {0.218554, 0.343778},
+        [132] = {0.466971, 0.217517}, [133] = {-0.400880, -0.299746}, [134] = {-0.582451, 0.591832}, [135] = {0.421843, 0.118453},
+        [136] = {-0.215617, -0.037630}, [137] = {0.341048, -0.283902}, [138] = {-0.246495, -0.138214}, [139] = {0.214287, -0.196102},
+        [140] = {0.809797, -0.498168}, [141] = {-0.115958, -0.260677}, [142] = {-0.025448, 0.043173}, [143] = {-0.416803, -0.180813},
+        [144] = {-0.782066, 0.335273}, [145] = {0.192178, -0.151171}, [146] = {0.109733, 0.165085}, [147] = {-0.617935, -0.274392},
+        [148] = {0.283301, 0.171837}, [149] = {-0.150202, 0.048709}, [150] = {-0.179954, -0.288559}, [151] = {-0.288267, -0.134894},
+        [152] = {-0.049203, 0.231717}, [153] = {-0.065761, 0.495457}, [154] = {0.082018, -0.457869}, [155] = {-0.159553, 0.032173},
+        [156] = {0.508305, -0.090690}, [157] = {0.232269, -0.338245}, [158] = {-0.374490, -0.480945}, [159] = {-0.541244, 0.194144},
+        [160] = {-0.040063, -0.073532}, [161] = {0.136516, -0.167617}, [162] = {-0.237350, 0.456912}, [163] = {-0.446604, -0.494381},
+        [164] = {0.078626, -0.020068}, [165] = {0.163208, 0.600330}, [166] = {-0.886186, -0.345326}, [167] = {-0.732948, -0.689349},
+        [168] = {0.460564, -0.719006}, [169] = {-0.033688, -0.333340}, [170] = {-0.325414, -0.111704}, [171] = {0.010928, 0.723791},
+        [172] = {0.713581, -0.077733}, [173] = {-0.050912, -0.444684}, [174] = {-0.268509, 0.381144}, [175] = {-0.175387, 0.147070},
+        [176] = {-0.429779, 0.144737}, [177] = {-0.054564, 0.821354}, [178] = {0.003205, 0.178130}, [179] = {-0.552814, 0.199046},
+        [180] = {0.225919, -0.195013}, [181] = {0.056040, -0.393974}, [182] = {-0.505988, 0.075184}, [183] = {-0.510223, 0.156271},
+        [184] = {-0.209616, 0.111174}, [185] = {-0.605132, -0.117104}, [186] = {0.412433, -0.035510}, [187] = {-0.573947, -0.691295},
+        [188] = {-0.712686, 0.021719}, [189] = {-0.643297, 0.145307}, [190] = {0.245038, 0.343062}, [191] = {-0.235623, -0.159307},
+        [192] = {-0.834004, 0.088725}, [193] = {0.121377, 0.671713}, [194] = {0.528614, 0.607035}, [195] = {-0.285699, -0.111312},
+        [196] = {0.603385, 0.401094}, [197] = {0.632098, -0.439659}, [198] = {0.681016, -0.242436}, [199] = {-0.261709, 0.304265},
+        [200] = {-0.653737, -0.199245}, [201] = {-0.435512, -0.762978}, [202] = {0.701105, 0.389527}, [203] = {0.093495, -0.148484},
+        [204] = {0.715218, 0.638291}, [205] = {-0.055431, -0.085173}, [206] = {-0.727438, 0.889783}, [207] = {-0.007230, -0.519183},
+        [208] = {-0.359615, 0.058657}, [209] = {0.294681, 0.601155}, [210] = {0.226879, -0.255430}, [211] = {-0.307847, -0.617373},
+        [212] = {0.340916, -0.780086}, [213] = {-0.028277, 0.610455}, [214] = {-0.365067, 0.323311}, [215] = {0.001059, -0.270451},
+        [216] = {0.304025, 0.047478}, [217] = {0.297389, 0.383859}, [218] = {0.288059, 0.262816}, [219] = {-0.889315, 0.533731},
+        [220] = {0.215887, 0.678889}, [221] = {0.287135, 0.343899}, [222] = {0.423951, 0.672285}, [223] = {0.411912, -0.812886},
+        [224] = {0.081615, -0.497358}, [225] = {-0.051963, -0.117891}, [226] = {-0.062387, 0.331698}, [227] = {0.020458, -0.734125},
+        [228] = {-0.160176, 0.196321}, [229] = {0.044898, -0.024032}, [230] = {-0.153162, 0.930951}, [231] = {-0.015084, 0.233476},
+        [232] = {0.395043, 0.645227}, [233] = {-0.232095, 0.283834}, [234] = {-0.507699, 0.317122}, [235] = {-0.606604, -0.227259},
+        [236] = {0.526430, -0.408765}, [237] = {0.304079, 0.135680}, [238] = {-0.134042, 0.508741}, [239] = {-0.276770, 0.383958},
+        [240] = {-0.298963, -0.233668}, [241] = {0.171889, 0.697367}, [242] = {-0.292571, -0.317604}, [243] = {0.587806, 0.115584},
+        [244] = {-0.346690, -0.098320}, [245] = {0.956701, -0.040982}, [246] = {0.040838, 0.595304}, [247] = {0.365201, -0.519547},
+        [248] = {-0.397271, -0.090567}, [249] = {-0.124873, -0.356800}, [250] = {-0.122144, 0.617725}, [251] = {0.191266, -0.197764},
+        [252] = {-0.178092, 0.503667}, [253] = {0.103221, 0.547538}, [254] = {0.019524, 0.621226}, [255] = {0.663918, -0.573476}
+    },
+    Spread = {                       -- class -> cone; learned ones replace these
+        weapon_smg1    = {0.04362, 0.04362},
+        weapon_ar2     = {0.02618, 0.02618},
+        weapon_shotgun = {0.08716, 0.08716},
+        weapon_pistol  = {0.00873, 0.00873},
+    },
+    vgun = {current = 0},            -- VGUNS spread state
 }
 
 function NS.StatusLine()
@@ -2851,148 +3541,118 @@ function NS.StatusLine()
 end
 
 do
-    local IA, IM, IQ, IR, NTAB = 16807, 2147483647, 127773, 2836, 32
-    local NDIV = 1 + math.floor((IM - 1) / NTAB)
-    local RNMX = 1 - 1.2e-7
+    -- MD5_PseudoRandom(n) & 255: byte 6 of the md5 of the 4 byte little endian number
+    function NS.Seed(n)
+        local s = string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+        return tonumber(string.sub(util.MD5(s), 13, 14), 16) or 0
+    end
 
-    -- CUniformRandomStream (Valve's ran1): seed it, then call it as RandomFloat(lo, hi)
-    local function Stream(seed)
-        local idum = seed < 0 and seed or -seed
-        local iy = 0
-        local iv = {}
+    -- the cone of your shots, per weapon class
+    AddHook("EntityFireBullets", "nospread", function(ent, data)
+        if ent ~= LocalPlayer() then return end
+        local wep = ent:GetActiveWeapon()
+        if not IsValid(wep) or not data.Spread then return end
 
-        local function generate()
-            local j, k
+        local class = wep:GetClass()
+        if not NS.Spread[class] or NS.Spread[class] ~= data.Spread then NS.Spread[class] = data.Spread end
+    end)
 
-            if idum <= 0 or iy == 0 then
-                if -idum < 1 then idum = 1 else idum = -idum end
+    -- gadik's VGunsSpreadPrediction:CalculateSpread
+    function NS.VGuns(wep, baseAngles)
+        local owner = wep:GetOwner()
+        if not IsValid(owner) or owner ~= LocalPlayer() or not wep.GetCurrentSpread then return baseAngles end
 
-                for jj = NTAB + 7, 0, -1 do
-                    k = math.floor(idum / IQ)
-                    idum = IA * (idum - k * IQ) - IR * k
-                    if idum < 0 then idum = idum + IM end
-                    if jj < NTAB then iv[jj] = idum end
-                end
+        local spread = wep:GetCurrentSpread()
+        local p = wep.Primary
+        if p and p.RPM and wep.LastShoot and CurTime() - wep.LastShoot > 1 / p.RPM * 1.5 then
+            local inc = p.SpreadIncrease and ((wep.Scoped and p.SpreadIncrease[2]) or p.SpreadIncrease[1]) or 0
+            NS.vgun.current = math.max(0, NS.vgun.current - FrameTime() * inc * 50)
+        else
+            NS.vgun.current = spread
+        end
 
-                iy = iv[0]
+        if spread > 0 then
+            local out = Angle(baseAngles)
+            out.pitch = out.pitch + math.Rand(-spread, spread) * 60
+            out.yaw = out.yaw + math.Rand(-spread, spread) * 60
+            return out
+        end
+
+        return baseAngles
+    end
+
+    -- gadik's PredictSpread: ang with this command's spread taken out, or ang itself
+    function NS.Predict(cmd, ply, ang)
+        local wep = ply:GetActiveWeapon()
+        if not IsValid(wep) then return ang end
+
+        if wep.VGUN then
+            math.randomseed(cmd:CommandNumber())
+            local predicted = NS.VGuns(wep, ang)
+            local out = ang - (predicted - ang)
+            out:Normalize()
+            NS.status = "vguns"
+            return out
+        end
+
+        local class = wep:GetClass()
+
+        -- CW 2.0 and SWB (a CW paste)
+        if string.StartWith(class, "cw") or string.StartWith(class, "swb") then
+            local cone
+            if string.StartWith(class, "swb") then
+                cone = wep.HipSpread
+                if wep.dt and wep.dt.State == 1 then cone = wep.AimSpread end     -- 1 = SWB_AIMING
+            else
+                cone = wep.CurCone
             end
 
-            k = math.floor(idum / IQ)
-            idum = IA * (idum - k * IQ) - IR * k
-            if idum < 0 then idum = idum + IM end
-
-            j = math.floor(iy / NDIV)
-            iy = iv[j]
-            iv[j] = idum
-
-            return iy
+            if isnumber(cone) then
+                if ply:Crouching() then cone = cone * 0.85 end
+                math.randomseed(cmd:CommandNumber())
+                local out = ang - Angle(math.Rand(-cone, cone), math.Rand(-cone, cone), 0) * 25
+                out:Normalize()
+                NS.status = string.format("%s  cone %.4f", class, cone)
+                return out
+            end
         end
 
-        return function(lo, hi)
-            local fl = generate() / IM
-            if fl > RNMX then fl = RNMX end
-            return fl * (hi - lo) + lo
-        end
-    end
-
-    -- MD5_PseudoRandom: md5 of the 4 byte little endian number, 4 bytes from offset 6, little endian
-    function NS.PseudoRandom(n)
-        local s = string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
-        local hex = util.MD5(s)
-
-        local function byte(i)
-            return tonumber(string.sub(hex, i * 2 + 1, i * 2 + 2), 16) or 0
+        local cone = NS.Spread[class]
+        if class == "weapon_pistol" then
+            local ramp = math.Clamp((wep:GetInternalVariable("m_flAccuracyPenalty") or 0) / 1.5, 0, 1)
+            cone = Lerp(ramp, Vector(0.00873, 0.00873, 0.00873), Vector(0.05234, 0.05234, 0.05234))
+        elseif not cone then
+            NS.status = class .. ": shoot once to learn its cone"
+            return ang
         end
 
-        return byte(6) + byte(7) * 256 + byte(8) * 65536 + byte(9) * 16777216
-    end
+        local seed = NS.Seed(cmd:CommandNumber())
+        local sd = NS.engineSpread[seed]
+        if not sd then return ang end
 
-    -- offsets along the view's right and up vectors that the engine adds to the shot
-    function NS.Offset(seed, cone)
-        local rnd = Stream(seed)
+        local coneX = cone.x or cone[1] or 0
+        local coneY = cone.y or cone[2] or 0
+        local x, y = sd[1], sd[2]
 
-        local x = rnd(-0.5, 0.5) + rnd(-0.5, 0.5)
-        local y = rnd(-0.5, 0.5) + rnd(-0.5, 0.5)
+        local dir = ang:Forward() + (x * coneX * ang:Right() * -1) + (y * coneY * ang:Up() * -1)
+        local out = dir:Angle()
+        out:Normalize()
 
-        return x * cone, y * cone
-    end
-
-    -- A view angle F such that F + a*right(F) + b*up(F) points along ang (the engine adds the
-    -- spread to the view direction in the view's own frame). Solved by a few fixed-point steps.
-    function NS.Compensate(ang, a, b)
-        local D = ang:Forward()
-        local F = D
-
-        for _ = 1, 4 do
-            local fa = F:Angle()
-            local lateral = fa:Right() * a + fa:Up() * b
-
-            local dl = D:Dot(lateral)
-            local c = dl + math.sqrt(math.max(dl * dl - lateral:LengthSqr() + 1, 0))
-
-            F = D * c - lateral
-            F:Normalize()
-        end
-
-        local out = F:Angle()
-        out.p = math.Clamp(math.NormalizeAngle(out.p), -89, 89)
-        out.y = math.NormalizeAngle(out.y)
-        out.r = 0
+        NS.status = string.format("%s  seed %d  cone %.4f", class, seed, coneX)
         return out
     end
 
-    -- ang with the spread cancelled when a supported weapon fires in this command, else ang itself
+    -- ang with the spread cancelled when you fire in this command, else ang itself
     function NS.Fix(cmd, ply, ang, shooting)
-        local n = cfg.nospread
-        if not n.enabled then return ang end
+        if not cfg.nospread.enabled then return ang end
 
         if shooting == nil then shooting = cmd:KeyDown(IN_ATTACK) end
         if not shooting then return ang end
 
-        local wep = ply:GetActiveWeapon()
-        if not IsValid(wep) then return ang end
-
-        local cone = NS.cones[wep:GetClass()]
-        if not cone then
-            if n.bases then return NS.Base(cmd, ply, wep, ang) end
-            return ang
-        end
-
-        local num = cmd:CommandNumber()
-        local seed = (NS.PseudoRandom(num) % 2147483648) % 256 + n.seedOffset
-
-        -- the status line shows our seed next to the one the engine put in the command, so the
-        -- formula can be checked against the real thing
-        -- (this GMod build has no CUserCmd:GetRandomSeed, so it is only read when it exists)
-        local engineSeed = cmd.GetRandomSeed and cmd:GetRandomSeed()
-            or (istable(nyxmod) and BT.M.cmd and nyxmod.GetRandomSeed(cmd)) or nil
-        NS.status = string.format("#%d  seed %d  engine %s", num % 100000, seed - n.seedOffset,
-            engineSeed and engineSeed ~= 0 and tostring((engineSeed % 2147483648) % 256) or "?")
-
-        local a, b = NS.Offset(seed, cone * n.scale)
-        return NS.Compensate(ang, a, b)
-    end
-
-    -- SWB / CW 2.0 (ported from ak47hack): the weapon's current cone (CurCone, in radians-ish
-    -- units the bases scale by 25 into degrees), the random offset rolled from the command number
-    -- and taken off the angle. Only right when the base rolls its spread the same way, so it is a
-    -- separate, experimental switch. The global RNG is reseeded afterwards.
-    function NS.Base(cmd, ply, wep, ang)
-        local base = string.match(wep:GetClass(), "^(%w+)_")
-        if base ~= "swb" and base ~= "cw" then return ang end
-
-        local cone = wep.CurCone
-        if not isnumber(cone) or cone <= 0 then return ang end
-        if base == "swb" and ply:Crouching() then cone = cone * 0.85 end
-
-        math.randomseed(cmd:CommandNumber())
-        local out = ang - Angle(math.Rand(-cone, cone), math.Rand(-cone, cone), 0) * 25 * cfg.nospread.scale
-        math.randomseed(SysTime() * 1000)
-
-        out.p = math.Clamp(math.NormalizeAngle(out.p), -89, 89)
-        out.y = math.NormalizeAngle(out.y)
+        local out = NS.Predict(cmd, ply, ang)
+        math.randomseed(SysTime() * 1000)            -- the global RNG goes back to random
+        out.p = math.Clamp(out.p, -89, 89)
         out.r = 0
-        NS.status = string.format("%s cone %.4f", base, cone)
         return out
     end
 
@@ -3013,6 +3673,7 @@ do
         return true
     end
 end
+
 
 -- returns true when it wrote an angle into the cmd this tick
 local function DoAim(cmd, ply)
@@ -5275,8 +5936,10 @@ end)
 
 local ssHidden = false          -- true while a clean frame is being produced
 
--- captures that got the clean frame (shown in the menu)
-local SSG = { hidden = 0 }
+-- captures that got the clean frame, for the menu (a table: the chunk is near its 200 locals)
+local SSG = {
+    hidden = 0,
+}
 
 -- night mode / sky changes live in material parameters, so a grab needs them put back and
 -- re-applied afterwards; the real functions are assigned in the world visuals block below
@@ -8229,113 +8892,36 @@ local function GetBind(tbl, key, create)
     return e
 end
 
--- tab icons (drawn with lines so there are no material dependencies)
-local function Line(x1, y1, x2, y2, col)
-    surface.SetDrawColor(col)
-    surface.DrawLine(x1, y1, x2, y2)
-    surface.DrawLine(x1 + 1, y1, x2 + 1, y2)
-end
+-- tab icons -------------------------------------------------------------------
+-- Icon font (menu_font.ttf in garrysmod/resource/fonts/, read when the game starts):
+-- A rage head, B crosshair, C half sun, D gears, E karambit, F person, G crossed-out head,
+-- and the ones added to it: H double chevron, I floppy disk, J cube, K </>.
+-- Without the file GMod draws the plain letter instead, so it shows at once when it's missing.
+surface.CreateFont("NyxIcons", {font = "menu_font", extended = true, size = 38, weight = 100, antialias = true})
 
-local function Ring(cx, cy, r, col)
-    local seg = 32
-    local px, py = cx + r, cy
-    for i = 1, seg do
-        local a = (i / seg) * math.pi * 2
-        local nx, ny = cx + math.cos(a) * r, cy + math.sin(a) * r
-        Line(px, py, nx, ny, col)
-        px, py = nx, ny
-    end
+function ANIM.Glyph(ch, cx, cy, col)     -- on ANIM: the main chunk is at Lua's 200 locals
+    draw.SimpleText(ch, "NyxIcons", cx, cy, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 end
 
 local ICONS = {
-    -- rage: bolt
-    function(cx, cy, col)
-        Line(cx + 5, cy - 17, cx - 7, cy + 1, col)
-        Line(cx - 7, cy + 1, cx + 3, cy + 1, col)
-        Line(cx + 3, cy + 1, cx - 5, cy + 17, col)
-        Line(cx + 6, cy - 17, cx + 7, cy - 9, col)
-        Line(cx - 4, cy + 17, cx - 3, cy + 9, col)
-    end,
-    -- anti-aim: ring with a bar through it
-    function(cx, cy, col)
-        Ring(cx, cy, 14, col)
-        Line(cx - 10, cy - 10, cx + 10, cy + 10, col)
-    end,
-    -- legit aim: crosshair
-    function(cx, cy, col)
-        Ring(cx, cy, 13, col)
-        Line(cx - 21, cy, cx - 8, cy, col)
-        Line(cx + 8, cy, cx + 21, cy, col)
-        Line(cx, cy - 21, cx, cy - 8, col)
-        Line(cx, cy + 8, cx, cy + 21, col)
-        surface.SetDrawColor(col)
-        surface.DrawRect(cx - 1, cy - 1, 3, 3)
-    end,
-    -- visuals: half-filled circle
-    function(cx, cy, col)
-        Ring(cx, cy, 15, col)
-        local pts = {}
-        for i = 0, 16 do
-            local a = math.pi / 2 + (i / 16) * math.pi
-            pts[#pts + 1] = {x = cx + math.cos(a) * 12, y = cy + math.sin(a) * 12}
-        end
-        surface.SetDrawColor(col)
-        draw.NoTexture()
-        surface.DrawPoly(pts)
-    end,
-    -- movement: double chevron
-    function(cx, cy, col)
-        for _, off in ipairs({-9, 5}) do
-            Line(cx + off - 5, cy - 12, cx + off + 5, cy, col)
-            Line(cx + off + 5, cy, cx + off - 5, cy + 12, col)
-        end
-    end,
-    -- misc: gear
-    function(cx, cy, col)
-        Ring(cx, cy, 9, col)
-        Ring(cx, cy, 4, col)
-        for i = 0, 7 do
-            local a = i * math.pi / 4
-            Line(cx + math.cos(a) * 9, cy + math.sin(a) * 9, cx + math.cos(a) * 15, cy + math.sin(a) * 15, col)
-        end
-    end,
-    -- config: floppy disk
-    function(cx, cy, col)
-        Line(cx - 13, cy - 13, cx + 9, cy - 13, col)
-        Line(cx + 9, cy - 13, cx + 13, cy - 9, col)
-        Line(cx + 13, cy - 9, cx + 13, cy + 13, col)
-        Line(cx + 13, cy + 13, cx - 13, cy + 13, col)
-        Line(cx - 13, cy + 13, cx - 13, cy - 13, col)
-        Line(cx - 7, cy - 13, cx - 7, cy - 5, col)
-        Line(cx - 7, cy - 5, cx + 6, cy - 5, col)
-        Line(cx + 6, cy - 5, cx + 6, cy - 13, col)
-        Line(cx - 7, cy + 13, cx - 7, cy + 4, col)
-        Line(cx - 7, cy + 4, cx + 7, cy + 4, col)
-        Line(cx + 7, cy + 4, cx + 7, cy + 13, col)
-    end,
-    -- players: head and shoulders
-    function(cx, cy, col)
-        Ring(cx, cy - 6, 6, col)
-        Line(cx - 13, cy + 14, cx - 11, cy + 5, col)
-        Line(cx - 11, cy + 5, cx - 5, cy + 2, col)
-        Line(cx - 5, cy + 2, cx + 5, cy + 2, col)
-        Line(cx + 5, cy + 2, cx + 11, cy + 5, col)
-        Line(cx + 11, cy + 5, cx + 13, cy + 14, col)
-        Line(cx - 13, cy + 14, cx + 13, cy + 14, col)
-    end,
-    -- entities: wireframe cube
-    function(cx, cy, col)
-        local s, o = 10, 6
-        Line(cx - s, cy - s + o, cx + s - o, cy - s + o, col)
-        Line(cx + s - o, cy - s + o, cx + s - o, cy + s, col)
-        Line(cx + s - o, cy + s, cx - s, cy + s, col)
-        Line(cx - s, cy + s, cx - s, cy - s + o, col)
-        Line(cx - s + o, cy - s, cx + s, cy - s, col)
-        Line(cx + s, cy - s, cx + s, cy + s - o, col)
-        Line(cx - s, cy - s + o, cx - s + o, cy - s, col)
-        Line(cx + s - o, cy - s + o, cx + s, cy - s, col)
-        Line(cx + s - o, cy + s, cx + s, cy + s - o, col)
-    end,
+    -- rage
+    function(cx, cy, col) ANIM.Glyph("A", cx, cy, col) end,
+    -- anti-aim
+    function(cx, cy, col) ANIM.Glyph("G", cx, cy, col) end,
+    -- legit aim
+    function(cx, cy, col) ANIM.Glyph("B", cx, cy, col) end,
+    -- visuals
+    function(cx, cy, col) ANIM.Glyph("C", cx, cy, col) end,
+    -- movement
+    function(cx, cy, col) ANIM.Glyph("H", cx, cy, col) end,
+    -- misc
+    function(cx, cy, col) ANIM.Glyph("D", cx, cy, col) end,
+    -- config
+    function(cx, cy, col) ANIM.Glyph("I", cx, cy, col) end,
+    -- players
+    function(cx, cy, col) ANIM.Glyph("F", cx, cy, col) end,
+    -- entities
+    function(cx, cy, col) ANIM.Glyph("J", cx, cy, col) end,
 }
 
 -- widgets ------------------------------------------------------------------
@@ -10036,21 +10622,24 @@ do
 end
 
 -- configs ---------------------------------------------------------------------
--- data/nyx/<name>.json holds every setting plus the feature binds. The menu works on ten fixed
--- slots; the console commands nyx_config_save / nyx_config_load / nyx_config_list take any name.
+-- Every config is a file of its own: data/nyx/configs/<name>.json, every setting plus the
+-- feature binds. The Config tab lists that folder (files copied in by hand show up after
+-- Refresh), saves under the name typed in, and opens the folder in Explorer (gmcl_nyx v4).
+-- The console commands nyx_config_save / nyx_config_load / nyx_config_list use the same files.
 
 -- The whole system sits in its own block and only exports CFGS: the file is close to Lua's limit
 -- of 200 local variables in one chunk, and nothing in here has to stay in scope afterwards.
 local CFGS = {}
 
 do
-local CONFIG_DIR = "nyx"
-local CONFIG_SLOTS = 10
+local CONFIG_DIR = "nyx/configs"
 
 local defaultCfg = table.Copy(cfg)       -- what "Reset" goes back to (nothing has been touched yet)
-local configSlot = 1
 local configStatus = "ready"
-local slotUsed = {}
+local configList = {}                    -- {name, time}, newest first
+local selected = nil                     -- the config picked in the list
+local typed = ""                         -- the name field
+local deleteArmed = 0                    -- Delete needs a second click within 3 s
 
 local function CleanName(name)
     name = string.gsub(tostring(name or ""), "[^%w_%-]", "")
@@ -10061,13 +10650,34 @@ local function ConfigPath(name)
     return CONFIG_DIR .. "/" .. name .. ".json"
 end
 
-local function RefreshSlots()
-    for i = 1, CONFIG_SLOTS do
-        slotUsed[i] = file.Exists(ConfigPath("config_" .. i), "DATA")
+local function RefreshList()
+    configList = {}
+    for _, f in ipairs(file.Find(CONFIG_DIR .. "/*.json", "DATA") or {}) do
+        configList[#configList + 1] = {name = string.StripExtension(f), time = file.Time(CONFIG_DIR .. "/" .. f, "DATA") or 0}
+    end
+    table.sort(configList, function(a, b) return a.time > b.time end)
+
+    if selected and not file.Exists(ConfigPath(selected), "DATA") then selected = nil end
+end
+
+-- Older versions kept the configs (config_1 .. config_10 and console-saved names) straight in
+-- data/nyx/, next to players.json and the rest. Every json there that is a config gets moved
+-- into configs/ once; the old file only goes after the copy reads back the same.
+do
+    file.CreateDir(CONFIG_DIR)
+    for _, f in ipairs(file.Find("nyx/*.json", "DATA") or {}) do
+        local raw = file.Read("nyx/" .. f, "DATA")
+        local data = raw and util.JSONToTable(raw)
+
+        if istable(data) and istable(data.cfg) and data.version then
+            local dst = CONFIG_DIR .. "/" .. f
+            if not file.Exists(dst, "DATA") then file.Write(dst, raw) end
+            if file.Read(dst, "DATA") == raw then file.Delete("nyx/" .. f) end
+        end
     end
 end
 
-RefreshSlots()
+RefreshList()
 
 -- name of the top level cfg table that tbl is (binds are stored against it)
 local function CfgTableName(tbl)
@@ -10110,7 +10720,7 @@ local function SaveConfig(name)
 
     file.CreateDir(CONFIG_DIR)
     file.Write(ConfigPath(name), util.TableToJSON({version = 1, cfg = cfg, binds = binds}, true))
-    RefreshSlots()
+    RefreshList()
 end
 
 -- returns true, or false + the reason
@@ -10141,53 +10751,187 @@ local function ResetConfig()
     ClearBinds()
 end
 
-local function SlotName(i)
-    return "config_" .. i
+-- The name field. Typing goes into a DTextEntry made a popup and laid over the field (the menu
+-- keeps its keyboard off so WASD works, so an entry inside it would never keep the focus).
+-- Enter saves under the name.
+local nameEntry = nil
+
+local function EditName(p)
+    if IsValid(nameEntry) then nameEntry:Remove() end
+
+    local te = vgui.Create("DTextEntry")
+    nameEntry = te
+
+    local x, y = p:LocalToScreen(0, 0)
+    te:SetPos(x + 1, y + 1)
+    te:SetSize(p:GetWide() - 2, p:GetTall() - 2)
+    te:SetFont("NyxUI")
+    te:SetText(typed)
+    te:SetUpdateOnType(true)
+    te:MakePopup()
+    te:RequestFocus()
+    te:SetCaretPos(#typed)
+    te.born = RealTime()
+
+    local function Close()
+        if IsValid(te) then te:Remove() end
+        if nameEntry == te then nameEntry = nil end
+    end
+
+    te.OnChange = function(self)
+        local clean = CleanName(self:GetValue())
+        if clean ~= self:GetValue() then
+            self:SetText(clean)
+            self:SetCaretPos(#clean)
+        end
+        typed = clean
+    end
+
+    te.OnEnter = function()
+        Close()
+        if CFGS.Save then CFGS.Save() end
+    end
+
+    -- the click that opened it can take the focus once; take it back
+    te.OnLoseFocus = function(self)
+        if RealTime() - self.born < 0.25 then
+            self:RequestFocus()
+            return
+        end
+        Close()
+    end
+
+    te.Paint = function(self, w, h)
+        surface.SetDrawColor(C.fieldHover)
+        surface.DrawRect(0, 0, w, h)
+        self:DrawTextEntryText(C.textHi, Color(C.accent.r, C.accent.g, C.accent.b, 120), C.textHi)
+    end
+
+    te.Think = function(self)
+        if not IsValid(menu) or menu.closing or not IsValid(p) or not p:IsVisible() or not p:GetParent():IsVisible() then
+            Close()
+            return
+        end
+
+        local px, py = p:LocalToScreen(0, 0)
+        if px + 1 ~= self:GetX() or py + 1 ~= self:GetY() then self:SetPos(px + 1, py + 1) end
+
+        if input.IsKeyDown(KEY_ESCAPE) then
+            gui.HideGameUI()
+            Close()
+            return
+        end
+
+        if RealTime() - self.born > 0.25 and input.IsMouseDown(MOUSE_LEFT) and not self:IsHovered() then Close() end
+    end
 end
 
--- the ten-row slot picker
-local function AddConfigSlots(g)
-    local rowH = 15
-    local p = WidgetPanel(g, 16 + 8 + CONFIG_SLOTS * rowH)
-    p:SetCursor("hand")
+local function AddNameField(g)
+    local p = WidgetPanel(g, 20)
+    p:SetCursor("beam")
 
-    local function rowAt(self, y)
-        local i = math.floor((y - 16 - 4) / rowH) + 1
-        if i >= 1 and i <= CONFIG_SLOTS then return i end
+    p.Paint = function(self, w, h)
+        local editing = IsValid(nameEntry)
+
+        surface.SetDrawColor(C.field)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(editing and C.accent or (self:IsHovered() and C.border or C.groupBorder))
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+
+        if not editing then
+            if typed == "" then
+                draw.SimpleText("config name", "NyxUI", 6, h / 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            else
+                draw.SimpleText(typed, "NyxUI", 6, h / 2, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            end
+        end
+    end
+
+    p.OnMousePressed = function(self, code)
+        if code == MOUSE_LEFT then EditName(self) end
+    end
+end
+
+-- every file in the folder: click picks it (and puts its name in the field), double click loads,
+-- the wheel scrolls
+local function AddConfigList(g, rows)
+    local rowH = 15
+    local p = WidgetPanel(g, 8 + rows * rowH)
+    p:SetCursor("hand")
+    p.scroll = 0
+    p.lastClick, p.lastName = 0, nil
+
+    local function itemAt(self, y)
+        local i = math.floor((y - 4) / rowH) + 1
+        if i < 1 or i > rows then return nil end
+        return configList[i + self.scroll]
     end
 
     p.Paint = function(self, w, h)
-        draw.SimpleText("Slot", "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-
         surface.SetDrawColor(C.field)
-        surface.DrawRect(0, 16, w, h - 16)
+        surface.DrawRect(0, 0, w, h)
         surface.SetDrawColor(C.groupBorder)
-        surface.DrawOutlinedRect(0, 16, w, h - 16, 1)
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+
+        self.scroll = math.Clamp(self.scroll, 0, math.max(0, #configList - rows))
 
         local hover
         if self:IsHovered() then
             local _, my = self:CursorPos()
-            hover = rowAt(self, my)
+            hover = itemAt(self, my)
         end
 
-        for i = 1, CONFIG_SLOTS do
-            local col = C.textDim
-            if i == configSlot then
+        for r = 1, rows do
+            local it = configList[r + self.scroll]
+            if not it then break end
+
+            local y = 4 + (r - 1) * rowH
+            local col = C.text
+            if it.name == selected then
                 col = C.accent
-            elseif i == hover then
+                surface.SetDrawColor(C.fieldHover)
+                surface.DrawRect(1, y, w - 2, rowH)
+            elseif it == hover then
                 col = C.textHi
             end
 
-            local label = string.format("%2d   %s%s", i, SlotName(i), slotUsed[i] and "   [saved]" or "")
-            draw.SimpleText(label, "NyxUI", 8, 16 + 4 + (i - 1) * rowH, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(it.name, "NyxUI", 8, y + rowH / 2, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(os.date("%d.%m %H:%M", it.time), "NyxUISmall", w - 8, y + rowH / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
+
+        if #configList == 0 then
+            draw.SimpleText("no configs yet", "NyxUI", w / 2, h / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        end
+
+        -- scroll bar
+        local max = #configList - rows
+        if max > 0 then
+            local bh = math.max(14, h * rows / #configList)
+            surface.SetDrawColor(C.accent.r, C.accent.g, C.accent.b, 200)
+            surface.DrawRect(w - 3, (h - bh) * self.scroll / max, 3, bh)
+        end
+    end
+
+    p.OnMouseWheeled = function(self, d)
+        if #configList <= rows then return end
+        self.scroll = self.scroll - d
+        return true
     end
 
     p.OnMousePressed = function(self, code)
         if code ~= MOUSE_LEFT then return end
         local _, my = self:CursorPos()
-        local i = rowAt(self, my)
-        if i then configSlot = i end
+        local it = itemAt(self, my)
+        if not it then return end
+
+        local now = RealTime()
+        if self.lastName == it.name and now - self.lastClick < 0.35 then
+            self.lastName = nil
+            if CFGS.Load then CFGS.Load() end
+        else
+            selected, typed = it.name, it.name
+            self.lastName, self.lastClick = it.name, now
+        end
     end
 end
 
@@ -10216,23 +10960,73 @@ concommand.Add("nyx_config_list", function()
 end)
 
 -- what the menu uses
-CFGS.AddSlots = AddConfigSlots
+CFGS.AddName = AddNameField
+CFGS.AddList = AddConfigList
 CFGS.Status = function() return configStatus end
 
+-- under the typed name (a new file, or over the one with that name)
 CFGS.Save = function()
-    SaveConfig(SlotName(configSlot))
-    configStatus = "saved slot " .. configSlot
+    local name = CleanName(typed ~= "" and typed or selected)
+    if name == "" then
+        configStatus = "type a name first"
+        return
+    end
+
+    local existed = file.Exists(ConfigPath(name), "DATA")
+    SaveConfig(name)
+    selected, typed = name, name
+    configStatus = (existed and "overwrote " or "saved ") .. name
 end
 
 CFGS.Load = function()
-    local ok, why = LoadConfig(SlotName(configSlot))
-    configStatus = ok and ("loaded slot " .. configSlot) or ("slot " .. configSlot .. ": " .. why)
+    if not selected then
+        configStatus = "pick a config in the list"
+        return
+    end
+
+    local ok, why = LoadConfig(selected)
+    configStatus = ok and ("loaded " .. selected) or (selected .. ": " .. why)
 end
 
 CFGS.Delete = function()
-    file.Delete(ConfigPath(SlotName(configSlot)))
-    RefreshSlots()
-    configStatus = "deleted slot " .. configSlot
+    if not selected then
+        configStatus = "pick a config in the list"
+        return
+    end
+
+    if RealTime() > deleteArmed then
+        deleteArmed = RealTime() + 3
+        configStatus = "click Delete again: " .. selected
+        return
+    end
+
+    deleteArmed = 0
+    file.Delete(ConfigPath(selected))
+    configStatus = "deleted " .. selected
+    if typed == selected then typed = "" end
+    selected = nil
+    RefreshList()
+end
+
+CFGS.Refresh = function()
+    RefreshList()
+    configStatus = #configList .. " config" .. (#configList == 1 and "" or "s")
+end
+
+-- Explorer on data/nyx/configs (gmcl_nyx v4); without it the path goes to the clipboard
+CFGS.OpenFolder = function()
+    file.CreateDir(CONFIG_DIR)
+
+    if istable(nyxmod) and isfunction(nyxmod.OpenFolder) then
+        local ok, why = nyxmod.OpenFolder(CONFIG_DIR)
+        configStatus = ok and ("opened data/" .. CONFIG_DIR) or ("can't open: " .. tostring(why))
+        return
+    end
+
+    local full = isfunction(util.RelativePathToFull) and util.RelativePathToFull("data/" .. CONFIG_DIR) or ""
+    if full == "" then full = "garrysmod/data/" .. CONFIG_DIR end
+    SetClipboardText(full)
+    configStatus = "needs gmcl_nyx v4 - path copied"
 end
 
 CFGS.Reset = function()
@@ -12888,15 +13682,12 @@ local function BuildMenu()
 
         local ns = cfg.nospread
         g = NewGroup(right, "No spread")
-        AddCheck(g, "No spread (HL2 weapons)", ns, "enabled", function(p)
-            AddSlider(p, "Seed offset", ns, "seedOffset", -3, 3, 0)
-            AddSlider(p, "Cone scale", ns, "scale", 0.25, 2, 2, "x")
+        AddCheck(g, "No spread", ns, "enabled", function(p)
             AddLabel(p, NS.StatusLine)
-            AddLabel(p, "pistol / smg1 / ar2; .357 is exact")
-            AddLabel(p, "shotgun pellets can't be aligned")
-            AddCheck(p, "SWB / CW 2.0 (experimental)", ns, "bases")
-            AddLabel(p, "seeded by command number - only")
-            AddLabel(p, "right if the base rolls it so")
+            AddLabel(p, "FireBullets weapons (HL2, M9K ...):")
+            AddLabel(p, "engine spread per seed x the cone")
+            AddLabel(p, "learned from your first shot.")
+            AddLabel(p, "CW 2.0 / SWB / VGUNS: their own roll.")
         end)
         EndGroup(g)
 
@@ -13470,6 +14261,52 @@ local function BuildMenu()
             AddLabel(p, "the map axes are tried (diagonals).")
             AddLabel(p, "Search settings: those of Texture bug.")
         end)
+        AddCheck(g, "Pixel surf", m, "pixelsurf", function(p)
+            AddCheck(p, "Auto align (press onto the lip)", m, "psAlign")
+            AddCheck(p, "Gain speed while surfing", m, "psGain")
+            AddSlider(p, "Look ahead", m, "psTicks", 1, 16, 0, " ticks")
+            AddLabel(p, MV.PSStatus, C.accent)
+            AddLabel(p, "Fall along a wall holding the key:")
+            AddLabel(p, "align presses you into the wall until a")
+            AddLabel(p, "tick ends at -half gravity (on a lip),")
+            AddLabel(p, "duck is held when only ducked reaches")
+            AddLabel(p, "the lip. Surfing, one move key slides")
+            AddLabel(p, "you along without falling off.")
+        end)
+        AddCheck(g, "Pixel finder", m, "psFinder", function(p)
+            AddKeybind(p, "Mark key", m, "psfKey")
+            AddCheck(p, "Live (wall under crosshair)", m, "psfLive")
+            AddSlider(p, "Live range", m, "psfRange", 8, 256, 0, "u")
+            AddSlider(p, "Hull inset", m, "psfInset", -0.05, 0.05, 5, "u")
+            AddButton(p, "Clear", MV.PSClear)
+            AddLabel(p, MV.PSFinderStatus, C.accent)
+            AddLabel(p, "Hold the key on a wall, look up or")
+            AddLabel(p, "down along it, let go: every unit of")
+            AddLabel(p, "the line is tested. Green line = a lip")
+            AddLabel(p, "to pixel surf on standing, cyan = only")
+            AddLabel(p, "ducked. No lips anywhere: inset 0.")
+        end)
+        AddCheck(g, "Pixel calculator", m, "psCalc", function(p)
+            AddCheck(p, "Panel by the crosshair", m, "psCalcHud")
+            AddKeybind(p, "Auto jump key", m, "psCalcKey")
+            AddLabel(p, MV.PSCalcStatus, C.accent)
+            AddLabel(p, "Look at a lip the finder drew (it")
+            AddLabel(p, "turns yellow): for jump, jump + duck")
+            AddLabel(p, "and crouch jump from where you stand")
+            AddLabel(p, "it shows the tick you'd catch it on.")
+            AddLabel(p, "In the air also 'falling now'. Learns")
+            AddLabel(p, "GMod's jump from your own jumps.")
+            AddLabel(p, "Auto key on the ground: does the jump.")
+        end)
+        AddCheck(g, "Mini jump", m, "minijump", function(p)
+            AddCheck(p, "Hold duck until landing", m, "mjHoldDuck")
+            AddLabel(p, "Jump + duck on the tick you walk")
+            AddLabel(p, "off an edge.")
+        end)
+        AddCheck(g, "Long jump", m, "longjump", function(p)
+            AddLabel(p, "Duck on the jump and the first")
+            AddLabel(p, "two ticks in the air.")
+        end)
         AddLabel(g, MV.Status, C.accent)
         AddLabel(g, "Right-click the check: bind it (hold)")
         EndGroup(g)
@@ -13641,6 +14478,19 @@ local function BuildMenu()
             AddSlider(p, "Position X", sl, "xPct", 0, 95, 0, "%")
             AddSlider(p, "Position Y", sl, "yPct", 0, 95, 0, "%")
         end)
+        local md = cfg.media
+        AddCheck(g, "Media player", md, "enabled", function(p)
+            AddCheck(p, "Cover", md, "cover")
+            AddCheck(p, "App name", md, "app")
+            AddCheck(p, "Hide when nothing plays", md, "autoHide")
+            AddSlider(p, "Opacity", md, "opacity", 20, 100, 0, "%")
+            AddButton(p, "Reset size / position", function()
+                md.x, md.y, md.w, md.h = -1, -1, 420, 96
+            end)
+            AddLabel(p, "Drag it to move, the corner to")
+            AddLabel(p, "resize (while the cursor is out).")
+            AddLabel(p, function() return BT.Media and BT.Media.Status() or "" end, C.accent)
+        end)
         local ind = cfg.indicator
         AddCheck(g, "Speed / bind indicator", ind, "enabled", function(p)
             AddCheck(p, "Speed", ind, "speed")
@@ -13677,10 +14527,13 @@ local function BuildMenu()
         local left, right = Cols(pages[7])
 
         local g = NewGroup(left, "Configs")
-        CFGS.AddSlots(g)
-        AddButton(g, "Save to slot", CFGS.Save)
-        AddButton(g, "Load slot", CFGS.Load)
-        AddButton(g, "Delete slot", CFGS.Delete)
+        CFGS.AddName(g)
+        CFGS.AddList(g, 10)
+        AddButton(g, "Save", CFGS.Save)
+        AddButton(g, "Load", CFGS.Load)
+        AddButton(g, "Delete", CFGS.Delete)
+        AddButton(g, "Refresh list", CFGS.Refresh)
+        AddButton(g, "Open configs folder", CFGS.OpenFolder)
         AddButton(g, "Reset all to defaults", CFGS.Reset)
         AddLabel(g, CFGS.Status, C.accent)
         EndGroup(g)
@@ -13689,8 +14542,10 @@ local function BuildMenu()
         AddLabel(g, "nyx_config_save <name>")
         AddLabel(g, "nyx_config_load <name>")
         AddLabel(g, "nyx_config_list")
-        AddLabel(g, "Files: garrysmod/data/nyx/")
+        AddLabel(g, "Files: garrysmod/data/nyx/configs/")
         AddLabel(g, "Saved: every setting + all binds")
+        AddLabel(g, "Click a config: pick, double: load")
+        AddLabel(g, "Enter in the name field: save")
         EndGroup(g)
 
         local bgc = cfg.bg
@@ -14505,7 +15360,7 @@ do
     -- cfg table + key -> short name; movement first, anything else only with "all binds"
     local SHORT = {
         {cfg.move, "edgebug", "eb"}, {cfg.move, "ebSteer", "aeb"}, {cfg.move, "texturebug", "tb"},
-        {cfg.move, "wallhang", "wh"}, {cfg.aa, "fakelag", "fl"}, {cfg.move, "airstuck", "stuck"},
+        {cfg.move, "wallhang", "wh"}, {cfg.move, "pixelsurf", "ps"}, {cfg.move, "minijump", "mj"}, {cfg.move, "longjump", "lj"}, {cfg.aa, "fakelag", "fl"}, {cfg.move, "airstuck", "stuck"},
         {cfg.move, "bhop", "bhop"}, {cfg.move, "autostrafe", "as"},
         {cfg.move, "circle", "cs"},
     }
@@ -15017,6 +15872,556 @@ AddHook("Think", "binds", function()
 end)
 
 -- ---------------------------------------------------------------------------
+-- media player: what Windows plays (Chrome, Spotify, Yandex Music ...: the session the volume
+-- flyout shows), read by gmcl_nyx v2 on its own thread. A small window over the HUD that takes
+-- the mouse whenever the cursor is out (menu open, chat, context menu): drag it anywhere, drag
+-- the bottom right corner to resize, click / drag the bar to seek. Place and size live in
+-- cfg.media, so they go into the configs too.
+-- ---------------------------------------------------------------------------
+
+-- A function of its own, not a do-block: a block's locals count toward the main chunk's 200,
+-- which is nearly full; a function gets its own 200 and sees the chunk's locals as upvalues.
+;(function()
+    local M = {panel = nil, info = nil, fetched = 0, nextFetch = 0, coverId = -1, mat = nil, file = nil, vis = 0}
+    BT.Media = M        -- Unload and the Misc tab reach it through BT (the main chunk has no locals left)
+
+    local MIN_W, MIN_H, MAX_W, MAX_H = 260, 72, 1000, 280
+    local GRIP = 12
+    local TAG = os.time()          -- materials are cached by path for the whole game: a new name per load
+
+    file.CreateDir("nyx/media")
+    for _, f in ipairs(file.Find("nyx/media/*", "DATA") or {}) do file.Delete("nyx/media/" .. f) end
+
+    local fonts = {}
+    local function Font(size, bold)
+        size = math.floor(size)
+        local name = "NyxMedia" .. (bold and "B" or "") .. size
+        if not fonts[name] then
+            -- extended: Cyrillic and the rest of what titles come in
+            surface.CreateFont(name, {font = "Verdana", size = size, weight = bold and 700 or 400, antialias = true, extended = true})
+            fonts[name] = true
+        end
+        return name
+    end
+
+    local function Time(s)
+        s = math.max(0, math.floor(s or 0))
+        if s >= 3600 then
+            return string.format("%d:%02d:%02d", math.floor(s / 3600), math.floor(s / 60) % 60, s % 60)
+        end
+        return string.format("%d:%02d", math.floor(s / 60), s % 60)
+    end
+
+    -- the text cut down (UTF-8 aware) with "..." until it fits w pixels; cached per text / font / width
+    local fitCache = {}
+    local function Fit(text, font, w)
+        local key = text .. "\0" .. font .. "\0" .. math.floor(w)
+        local hit = fitCache[key]
+        if hit then return hit end
+
+        surface.SetFont(font)
+        local out = text
+        if surface.GetTextSize(text) > w then
+            local chars = {}
+            for c in string.gmatch(text, "[%z\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = c end
+
+            local n = #chars
+            repeat
+                n = n - 1
+                out = table.concat(chars, "", 1, math.max(n, 0)) .. "..."
+            until n <= 0 or surface.GetTextSize(out) <= w
+        end
+
+        if table.Count(fitCache) > 64 then fitCache = {} end
+        fitCache[key] = out
+        return out
+    end
+
+    -- "Spotify.exe" -> Spotify, "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic" -> ZuneMusic
+    local function AppName(id)
+        id = string.match(id or "", "!(.+)$") or id or ""
+        id = string.gsub(id, "%.exe$", "")
+        id = string.match(id, "([^%.]+)$") or id
+        return id
+    end
+
+    local function HasMedia()
+        return istable(nyxmod) and isfunction(nyxmod.Media)
+    end
+
+    function M.Status()
+        if not istable(nyxmod) then return "needs gmcl_nyx (lua/bin)" end
+        -- a loaded dll stays in the game until it quits: a new file on disk needs a full restart
+        if not HasMedia() then return "gmcl_nyx v" .. tostring(nyxmod.version) .. " loaded: needs v2, restart GMod" end
+        local i = M.info
+        if not i then return "starting..." end
+        if i.err ~= "" then return "error: " .. i.err end
+        if not i.has then return "nothing playing" end
+        return (i.playing and "playing" or "paused") .. " in " .. AppName(i.app)
+    end
+
+    local function Fetch()
+        if not HasMedia() then
+            M.info = nil
+            return
+        end
+
+        nyxmod.MediaStart()              -- cheap when it already runs
+        local ok, info = pcall(nyxmod.Media)
+        if not ok or not istable(info) then return end
+        M.info, M.fetched = info, RealTime()
+
+        if info.coverId ~= M.coverId then
+            M.coverId = info.coverId
+            M.mat = nil
+            if M.file then file.Delete(M.file) end
+            M.file = nil
+
+            local data, ext = nyxmod.MediaCover()
+            if data then
+                M.file = "nyx/media/cover_" .. TAG .. "_" .. info.coverId .. "." .. ext
+                file.Write(M.file, data)
+                local mat = Material("../data/" .. M.file, "smooth mips")
+                if mat and not mat:IsError() then M.mat = mat end
+            end
+        end
+    end
+
+    -- position now: moved on since the fetch while playing; a fresh seek shows where it went
+    local function Pos(i)
+        if M.seekAt and RealTime() - M.seekAt < 1.2 then return M.seekTo end
+        local p = i.pos
+        if i.playing then p = p + RealTime() - M.fetched end
+        if i.dur > 0 then p = math.min(p, i.dur) end
+        return p
+    end
+
+    local function Control(cmd, arg)
+        if HasMedia() then nyxmod.MediaControl(cmd, arg) end
+        M.nextFetch = 0
+    end
+
+    local function Rect()
+        local c = cfg.media
+        local w = math.Clamp(c.w, MIN_W, math.min(MAX_W, ScrW()))
+        local h = math.Clamp(c.h, MIN_H, math.min(MAX_H, ScrH()))
+        local x = c.x >= 0 and c.x or (ScrW() - w) / 2
+        local y = c.y >= 0 and c.y or 60
+        return math.Clamp(x, 0, ScrW() - w), math.Clamp(y, 0, ScrH() - h), w, h
+    end
+
+    -- where everything sits for a w x h window
+    local function Layout(w, h)
+        local L = {}
+        L.pad = math.Clamp(math.floor(h * 0.09), 6, 14)
+        L.cover = (cfg.media.cover and h >= 64) and (h - L.pad * 2) or 0
+        L.x0 = L.pad + (L.cover > 0 and L.cover + L.pad or 0)
+        L.x1 = w - L.pad
+
+        L.fTitle = Font(math.Clamp(h * 0.16, 11, 24), true)
+        L.fSub = Font(math.Clamp(h * 0.13, 10, 18), false)
+
+        surface.SetFont(L.fTitle)
+        local _, th = surface.GetTextSize("Ag")
+        surface.SetFont(L.fSub)
+        local _, sh = surface.GetTextSize("Ag")
+
+        L.titleY = L.pad - 1
+        L.subY = L.titleY + th
+        L.barY = h - L.pad - math.floor(sh / 2)
+        L.sh = sh
+
+        -- controls: centred between the artist line and the bar
+        local top, bottom = L.subY + sh, L.barY - sh / 2 - 2
+        L.btn = math.Clamp(math.floor((bottom - top) * 0.75), 10, 40)
+        L.ctlY = math.floor((top + bottom) / 2)
+        L.ctlX = math.floor((L.x0 + L.x1) / 2)
+        L.gap = math.floor(L.btn * 1.8)
+
+        -- the bar between the two times (room for h:mm:ss once something is an hour long)
+        surface.SetFont(L.fSub)
+        local long = M.info and M.info.dur >= 3600
+        L.timeW = surface.GetTextSize(long and "0:00:00" or "00:00")
+        L.barX0 = L.x0 + L.timeW + 8
+        L.barX1 = L.x1 - L.timeW - 8
+
+        -- volume: speaker + slider at the right end of the controls row, when it fits beside
+        -- the next button (and the module reports a volume at all)
+        local sw = math.Clamp(math.floor((L.x1 - L.x0) * 0.26), 50, 140)
+        L.icon = math.Clamp(math.floor(L.btn * 0.9), 10, 22)
+        L.volX1 = L.x1
+        L.volX0 = L.x1 - sw
+        L.iconX = L.volX0 - 8 - L.icon
+        L.vol = M.info ~= nil and (M.info.volume or -1) >= 0
+            and L.iconX > L.ctlX + L.gap + L.btn * 0.6 + 8
+        return L
+    end
+
+    -- the volume shown: the slider's own value while it is held or just let go, else the session's
+    local function Volume(i)
+        if M.volAt and RealTime() - M.volAt < 1 then return M.volLocal end
+        return math.Clamp(i.volume or 0, 0, 1)
+    end
+
+    local function SetVolume(v, force)
+        v = math.Clamp(v, 0, 1)
+        M.volLocal, M.volAt = v, RealTime()
+
+        -- the worker wakes on every command: at most ~16 a second while dragging
+        if force or not M.volSent or RealTime() - M.volSent > 0.06 then
+            M.volSent = RealTime()
+            Control("volume", v)
+        end
+    end
+
+    local function Tri(a, b, c)
+        surface.DrawPoly({{x = a[1], y = a[2]}, {x = b[1], y = b[2]}, {x = c[1], y = c[2]}})
+    end
+
+    local BUTTONS = {
+        {cmd = "prev", dx = -1, can = "canPrev"},
+        {cmd = "toggle", dx = 0, can = "canToggle"},
+        {cmd = "next", dx = 1, can = "canNext"},
+    }
+
+    local function DrawButton(b, x, y, s, col, playing)
+        surface.SetDrawColor(col)
+        draw.NoTexture()
+        local h = s / 2
+
+        if b.cmd == "toggle" then
+            if playing then
+                local bw = math.max(2, math.floor(s * 0.28))
+                surface.DrawRect(x - h * 0.75, y - h, bw, s)
+                surface.DrawRect(x + h * 0.75 - bw, y - h, bw, s)
+            else
+                Tri({x - h * 0.7, y - h}, {x + h * 0.9, y}, {x - h * 0.7, y + h})
+            end
+        elseif b.cmd == "prev" then
+            local bw = math.max(2, math.floor(s * 0.16))
+            surface.DrawRect(x - h * 0.8, y - h * 0.8, bw, s * 0.8)
+            Tri({x + h * 0.8, y - h * 0.8}, {x + h * 0.8, y + h * 0.8}, {x - h * 0.5, y})
+        else
+            local bw = math.max(2, math.floor(s * 0.16))
+            surface.DrawRect(x + h * 0.8 - bw, y - h * 0.8, bw, s * 0.8)
+            Tri({x - h * 0.8, y - h * 0.8}, {x + h * 0.5, y}, {x - h * 0.8, y + h * 0.8})
+        end
+    end
+
+    -- what is under the cursor: "grip" | "bar" | a BUTTONS entry | nil (the window itself)
+    local function HitTest(L, w, h, mx, my)
+        if mx >= w - GRIP and my >= h - GRIP then return "grip" end
+        if mx >= L.barX0 - 4 and mx <= L.barX1 + 4 and math.abs(my - L.barY) <= math.max(6, L.sh / 2) then return "bar" end
+
+        if L.vol and math.abs(my - L.ctlY) <= math.max(8, L.icon * 0.7) then
+            if mx >= L.volX0 - 4 and mx <= L.volX1 + 4 then return "vol" end
+            if mx >= L.iconX - 2 and mx <= L.iconX + L.icon + 2 then return "mute" end
+        end
+
+        for _, b in ipairs(BUTTONS) do
+            local bx = L.ctlX + b.dx * L.gap
+            if math.abs(mx - bx) <= L.btn * 0.8 and math.abs(my - L.ctlY) <= L.btn * 0.8 then return b end
+        end
+    end
+
+    local function BarTime(L, mx, dur)
+        return math.Clamp((mx - L.barX0) / math.max(1, L.barX1 - L.barX0), 0, 1) * dur
+    end
+
+    local function VolAt(L, mx)
+        return math.Clamp((mx - L.volX0) / math.max(1, L.volX1 - L.volX0), 0, 1)
+    end
+
+    -- speaker: box + cone, then 0..2 waves by level, or a cross when muted
+    local function DrawSpeaker(x, cy, s, level, muted, col)
+        surface.SetDrawColor(col)
+        draw.NoTexture()
+
+        local h = s / 2
+        surface.DrawRect(x, cy - h * 0.35, s * 0.22, h * 0.7)
+        surface.DrawPoly({
+            {x = x + s * 0.2, y = cy - h * 0.35}, {x = x + s * 0.5, y = cy - h},
+            {x = x + s * 0.5, y = cy + h}, {x = x + s * 0.2, y = cy + h * 0.35},
+        })
+
+        local wx = x + s * 0.62
+        if muted then
+            surface.DrawLine(wx, cy - h * 0.45, wx + s * 0.36, cy + h * 0.45)
+            surface.DrawLine(wx, cy + h * 0.45, wx + s * 0.36, cy - h * 0.45)
+            return
+        end
+
+        local waves = level <= 0.01 and 0 or (level < 0.5 and 1 or 2)
+        for n = 1, waves do
+            local r = s * (0.16 + 0.2 * (n - 1))
+            local px, py
+            for k = -3, 3 do
+                local a = k / 3 * 0.9
+                local nx, ny = wx + math.cos(a) * r, cy + math.sin(a) * r * 1.4
+                if px then surface.DrawLine(px, py, nx, ny) end
+                px, py = nx, ny
+            end
+        end
+    end
+
+    local function Create()
+        local p = vgui.Create("Panel")
+        p:SetMouseInputEnabled(true)
+        p:SetKeyboardInputEnabled(false)
+
+        p.Think = function(self)
+            local x, y, w, h = Rect()
+            local c = cfg.media
+
+            if self.drag then
+                local mx, my = gui.MouseX(), gui.MouseY()
+                c.x = math.Clamp(mx - self.drag[1], 0, ScrW() - w)
+                c.y = math.Clamp(my - self.drag[2], 0, ScrH() - h)
+                x, y = c.x, c.y
+            elseif self.resize then
+                local mx, my = gui.MouseX(), gui.MouseY()
+                c.w = math.Clamp(self.resize[3] + mx - self.resize[1], MIN_W, math.min(MAX_W, ScrW() - x))
+                c.h = math.Clamp(self.resize[4] + my - self.resize[2], MIN_H, math.min(MAX_H, ScrH() - y))
+                c.x, c.y = x, y              -- pinned once it's been resized from the default place
+                w, h = c.w, c.h
+            end
+
+            self:SetPos(x, y)
+            self:SetSize(w, h)
+
+            if self.volDrag and self.L then SetVolume(VolAt(self.L, self:CursorPos())) end
+
+            local cursor = vgui.CursorVisible()
+            local i = M.info
+            local want = (not cfg.media.autoHide) or cursor or (i and i.has) or not HasMedia()
+            M.vis = ANIM.Step(M.vis, want and 1 or 0, 8)
+
+            local hit = (cursor and self:IsHovered()) and HitTest(self.L or Layout(w, h), w, h, self:CursorPos()) or nil
+            self:SetCursor((hit == "grip" or self.resize) and "sizenwse" or ((hit or self.seeking or self.volDrag) and "hand" or "sizeall"))
+        end
+
+        p.Paint = function(self, w, h)
+            if IsHidden() or M.vis <= 0.01 then return end
+
+            local L = Layout(w, h)
+            self.L = L
+            local a = M.vis * cfg.media.opacity / 100
+            local i = M.info
+            local mx, my = self:CursorPos()
+            local hot = self:IsHovered() and vgui.CursorVisible() and HitTest(L, w, h, mx, my) or nil
+
+            -- frame: the HUD lists' look
+            surface.SetDrawColor(13, 13, 13, 235 * a)
+            surface.DrawRect(0, 0, w, h)
+            surface.SetDrawColor(50, 50, 50, 255 * a)
+            surface.DrawOutlinedRect(0, 0, w, h, 1)
+            for gx = 0, w - 1, 2 do
+                local r, g, b = GradientAt(gx / w)
+                surface.SetDrawColor(r, g, b, 255 * a)
+                surface.DrawRect(gx, 0, 2, 2)
+            end
+
+            -- cover (centre-cropped to a square), or an empty frame
+            if L.cover > 0 then
+                local cx, cy, cs = L.pad, L.pad, L.cover
+                if M.mat then
+                    local mw, mh = M.mat:Width(), M.mat:Height()
+                    local u0, v0, u1, v1 = 0, 0, 1, 1
+                    if mw > mh then
+                        u0 = (1 - mh / mw) / 2
+                        u1 = 1 - u0
+                    elseif mh > mw then
+                        v0 = (1 - mw / mh) / 2
+                        v1 = 1 - v0
+                    end
+                    surface.SetMaterial(M.mat)
+                    surface.SetDrawColor(255, 255, 255, 255 * a)
+                    surface.DrawTexturedRectUV(cx, cy, cs, cs, u0, v0, u1, v1)
+                else
+                    surface.SetDrawColor(26, 26, 26, 255 * a)
+                    surface.DrawRect(cx, cy, cs, cs)
+                end
+                surface.SetDrawColor(38, 38, 38, 255 * a)
+                surface.DrawOutlinedRect(cx, cy, cs, cs, 1)
+            end
+
+            local white = Color(255, 255, 255, 255 * a)
+            local text = Color(C.text.r, C.text.g, C.text.b, 255 * a)
+            local dim = Color(C.textDim.r, C.textDim.g, C.textDim.b, 255 * a)
+            local acc = Color(C.accent.r, C.accent.g, C.accent.b, 255 * a)
+
+            -- title / artist / app
+            local title, sub
+            if i and i.has then
+                title = i.title ~= "" and i.title or "untitled"
+                sub = i.artist ~= "" and i.artist or (i.album ~= "" and i.album or AppName(i.app))
+            else
+                title = "nothing playing"
+                sub = M.Status()
+            end
+
+            local titleRight = L.x1
+            if cfg.media.app and i and i.has then
+                local app = AppName(i.app)
+                surface.SetFont(L.fSub)
+                local aw = surface.GetTextSize(app)
+                draw.SimpleText(app, L.fSub, L.x1, L.titleY + 2, dim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+                titleRight = L.x1 - aw - 10
+            end
+
+            draw.SimpleText(Fit(title, L.fTitle, titleRight - L.x0), L.fTitle, L.x0, L.titleY, white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(Fit(sub, L.fSub, L.x1 - L.x0), L.fSub, L.x0, L.subY, text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+
+            -- controls
+            for _, b in ipairs(BUTTONS) do
+                local can = i and i.has and i[b.can]
+                local col = not can and Color(70, 70, 70, 255 * a) or (hot == b and acc or white)
+                local s = b.cmd == "toggle" and L.btn or math.floor(L.btn * 0.8)
+                DrawButton(b, L.ctlX + b.dx * L.gap, L.ctlY, s, col, i and i.playing)
+            end
+
+            -- volume
+            if L.vol and i then
+                local v = Volume(i)
+                local muted = i.muted and not (M.volAt and RealTime() - M.volAt < 1)
+                local active = hot == "vol" or self.volDrag
+
+                DrawSpeaker(L.iconX, L.ctlY, L.icon, v, muted, hot == "mute" and acc or (muted and dim or white))
+
+                local thick = active and 4 or 2
+                surface.SetDrawColor(45, 45, 45, 255 * a)
+                surface.DrawRect(L.volX0, L.ctlY - thick / 2, L.volX1 - L.volX0, thick)
+
+                local fx = L.volX0 + (L.volX1 - L.volX0) * v
+                surface.SetDrawColor(muted and dim or acc)
+                surface.DrawRect(L.volX0, L.ctlY - thick / 2, fx - L.volX0, thick)
+
+                if active then
+                    surface.SetDrawColor(white)
+                    surface.DrawRect(fx - 3, L.ctlY - 5, 6, 10)
+                    draw.SimpleText(math.Round(v * 100) .. "%" .. (i.volumeOf == "system" and " (system)" or ""),
+                        L.fSub, L.volX1, L.ctlY - 7, text, TEXT_ALIGN_RIGHT, TEXT_ALIGN_BOTTOM)
+                end
+            end
+
+            -- times and the bar
+            local dur = i and i.dur or 0
+            local pos = (i and i.has) and Pos(i) or 0
+            if self.seeking and dur > 0 then pos = BarTime(L, mx, dur) end
+
+            draw.SimpleText(Time(pos), L.fSub, L.x0, L.barY, text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(Time(dur), L.fSub, L.x1, L.barY, text, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+
+            local bx0, bx1 = L.barX0, L.barX1
+            local thick = (hot == "bar" or self.seeking) and 4 or 2
+            surface.SetDrawColor(45, 45, 45, 255 * a)
+            surface.DrawRect(bx0, L.barY - thick / 2, bx1 - bx0, thick)
+
+            if dur > 0 then
+                local fx = bx0 + (bx1 - bx0) * math.Clamp(pos / dur, 0, 1)
+                surface.SetDrawColor(acc)
+                surface.DrawRect(bx0, L.barY - thick / 2, fx - bx0, thick)
+
+                if hot == "bar" or self.seeking then
+                    surface.SetDrawColor(white)
+                    surface.DrawRect(fx - 3, L.barY - 5, 6, 10)
+                end
+            end
+
+            -- resize grip: the usual triangle of dots, only while the cursor is out
+            if vgui.CursorVisible() then
+                surface.SetDrawColor((hot == "grip" or self.resize) and acc or dim)
+                for gx = 0, 2 do
+                    for gy = 0, 2 - gx do
+                        surface.DrawRect(w - 4 - gx * 3, h - 4 - gy * 3, 2, 2)
+                    end
+                end
+            end
+        end
+
+        p.OnMousePressed = function(self, code)
+            if code ~= MOUSE_LEFT then return end
+
+            local w, h = self:GetSize()
+            local L = self.L or Layout(w, h)
+            local mx, my = self:CursorPos()
+            local hit = HitTest(L, w, h, mx, my)
+            local i = M.info
+
+            if hit == "grip" then
+                self.resize = {gui.MouseX(), gui.MouseY(), w, h}
+            elseif hit == "mute" then
+                Control("mute")
+                return
+            elseif hit == "vol" then
+                self.volDrag = true
+                SetVolume(VolAt(L, mx), true)
+            elseif hit == "bar" then
+                if i and i.has and i.canSeek and i.dur > 0 then self.seeking = true end
+            elseif istable(hit) then
+                if i and i.has and i[hit.can] then Control(hit.cmd) end
+                return
+            else
+                self.drag = {mx, my}
+            end
+
+            self:MouseCapture(true)
+        end
+
+        -- the wheel anywhere over the player: volume in 5 % steps
+        p.OnMouseWheeled = function(self, d)
+            local i = M.info
+            if not (i and (i.volume or -1) >= 0) then return end
+            SetVolume(Volume(i) + d * 0.05, true)
+            return true
+        end
+
+        p.OnMouseReleased = function(self)
+            if self.volDrag and self.L then
+                SetVolume(VolAt(self.L, self:CursorPos()), true)
+            end
+
+            if self.seeking and M.info then
+                local t = BarTime(self.L, self:CursorPos(), M.info.dur)
+                Control("seek", t)
+                M.seekTo, M.seekAt = t, RealTime()     -- shown there until the session catches up
+            end
+
+            self.drag, self.resize, self.seeking, self.volDrag = nil, nil, nil, nil
+            self:MouseCapture(false)
+        end
+
+        return p
+    end
+
+    function M.Close()
+        if IsValid(M.panel) then M.panel:Remove() end
+        M.panel = nil
+        if HasMedia() then pcall(nyxmod.MediaStop) end
+        if M.file then file.Delete(M.file) end
+        M.file, M.mat, M.info, M.coverId = nil, nil, nil, -1
+    end
+
+    AddHook("Think", "media", function()
+        if not cfg.media.enabled then
+            if M.panel or M.info then M.Close() end
+            return
+        end
+
+        if not IsValid(M.panel) then
+            M.panel = Create()
+            M.vis = 0
+        end
+
+        local now = RealTime()
+        if now >= M.nextFetch then
+            M.nextFetch = now + 0.2
+            Fetch()
+        end
+    end)
+end)()
+
+-- ---------------------------------------------------------------------------
 -- toggle / unload keys
 -- ---------------------------------------------------------------------------
 
@@ -15056,6 +16461,7 @@ local function Unload()
         pcall(nyxmod.SetHold, false, 1)
         pcall(nyxmod.NetUnhook)
     end
+    if BT.Media then BT.Media.Close() end
     BAG.Log.Restore()
     BAG.Log.CloseWindow()
     concommand.Remove("nyx_net_menu")
