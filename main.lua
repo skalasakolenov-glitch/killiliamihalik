@@ -544,9 +544,6 @@ local cfg = {
     },
     misc = {
         antiSS = true,             -- hide every cheat visual from screengrabs
-        ssAlert   = true,          -- notice when the server grabs your screen
-        ssSound   = true,          -- shutter sound on a grab
-        ssPreview = true,          -- save the grab to data/nyx/grabs/ and show it on screen
     },
 }
 
@@ -5278,18 +5275,8 @@ end)
 
 local ssHidden = false          -- true while a clean frame is being produced
 
--- screengrab alert: every capture is counted, its picture saved to data/nyx/grabs/ and shown
--- in a corner with a shutter sound. One table instead of new locals (the chunk is at 200).
-local SSG = {
-    hidden  = 0,                -- captures that got the clean frame
-    grabs   = 0,                -- captures seen at all
-    mat     = nil,              -- the latest grab as a material
-    file    = "",
-    src     = "",               -- Lua file:line that called the capture
-    time    = -100,             -- RealTime() of the latest grab
-    soundAt = 0,
-    SHOW    = 6,                -- seconds the preview stays
-}
+-- captures that got the clean frame (shown in the menu)
+local SSG = { hidden = 0 }
 
 -- night mode / sky changes live in material parameters, so a grab needs them put back and
 -- re-applied afterwards; the real functions are assigned in the world visuals block below
@@ -5346,61 +5333,8 @@ local function RenderCleanFrame()
     pcall(render.RenderView, view)
 end
 
--- file:line of whoever called the wrapper (level 1 = this, 2 = the wrapper, 3 = the caller)
-function SSG.Caller()
-    local info = debug.getinfo(3, "Sl")
-    if not info then return "?" end
-    return (info.short_src or "?") .. ":" .. (info.currentline or 0)
-end
-
--- A grab happened. data is what the server's tool got (render.Capture), or nil for
--- render.CapturePixels: then the framebuffer is still the one it read, so it is captured again
--- here with the original function (no recursion, nothing reaches the server).
-function SSG.Notify(data, params, src)
-    local m = cfg.misc
-    if not m.ssAlert then return end
-
-    SSG.grabs = SSG.grabs + 1
-
-    local ext = "jpg"
-    if data then
-        if istable(params) and params.format == "png" then ext = "png" end
-    else
-        local ok, d = pcall(origCapture, {format = "jpeg", quality = 80, x = 0, y = 0, w = ScrW(), h = ScrH()})
-        data = ok and d or nil
-    end
-
-    if m.ssPreview and data and #data > 0 then
-        file.CreateDir("nyx/grabs")
-        local name = os.date("%Y%m%d_%H%M%S") .. "_" .. SSG.grabs .. "." .. ext
-        file.Write("nyx/grabs/" .. name, data)
-
-        -- unique name per grab: Material() caches by path
-        local mat = Material("../data/nyx/grabs/" .. name, "smooth")
-        SSG.mat = (mat and not mat:IsError()) and mat or nil
-        SSG.file = "data/nyx/grabs/" .. name
-    end
-
-    SSG.src, SSG.time = src, RealTime()
-
-    -- some tools capture in bursts; one shutter per half second
-    if m.ssSound and RealTime() - SSG.soundAt > 0.5 then
-        SSG.soundAt = RealTime()
-        surface.PlaySound("npc/scanner/scanner_photo1.wav")
-    end
-
-    MsgC(Color(255, 80, 80), "[nyx] screengrab ", color_white, "#" .. SSG.grabs .. " from " .. src
-        .. (SSG.file ~= "" and ("  ->  " .. SSG.file) or "") .. "\n")
-end
-
 render.Capture = function(...)
-    local src = SSG.Caller()
-
-    if not cfg.misc.antiSS then
-        local data = origCapture(...)
-        SSG.Notify(data, (...), src)
-        return data
-    end
+    if not cfg.misc.antiSS then return origCapture(...) end
 
     RenderCleanFrame()
     local ok, data = pcall(origCapture, ...)
@@ -5408,57 +5342,19 @@ render.Capture = function(...)
     WorldMaterialsRestore()
 
     if not ok then error(data, 0) end
-    SSG.Notify(data, (...), src)
     return data
 end
 
 render.CapturePixels = function(...)
-    local src = SSG.Caller()
-
-    if not cfg.misc.antiSS then
-        origCapturePixels(...)
-        SSG.Notify(nil, nil, src)
-        return
-    end
+    if not cfg.misc.antiSS then return origCapturePixels(...) end
 
     RenderCleanFrame()
     local ok, err = pcall(origCapturePixels, ...)
-
-    -- re-capture before the world looks get re-applied: the framebuffer still holds the clean frame
-    if ok then SSG.Notify(nil, nil, src) end
-
     ssHidden = false
     WorldMaterialsRestore()
 
     if not ok then error(err, 0) end
 end
-
--- the latest grab in the top right corner, fading out; never part of a clean frame
-AddHook("HUDPaint", "ssgrab", function()
-    if IsHidden() or not cfg.misc.ssAlert then return end
-
-    local age = RealTime() - SSG.time
-    if age > SSG.SHOW then return end
-
-    local a = math.Clamp((SSG.SHOW - age) / 0.6, 0, 1) * 255
-    local w = 320
-    local h = SSG.mat and math.floor(w * ScrH() / ScrW()) or 0
-    local x, y = ScrW() - w - 16, 16
-
-    surface.SetDrawColor(15, 15, 15, a * 0.9)
-    surface.DrawRect(x - 4, y - 4, w + 8, h + 46)
-    surface.SetDrawColor(255, 70, 70, a)
-    surface.DrawOutlinedRect(x - 4, y - 4, w + 8, h + 46)
-
-    draw.SimpleText("SCREENGRAB  #" .. SSG.grabs, "DermaDefaultBold", x, y, Color(255, 80, 80, a))
-    draw.SimpleText(SSG.src, "DermaDefault", x, y + 16, Color(220, 220, 220, a))
-
-    if SSG.mat then
-        surface.SetDrawColor(255, 255, 255, a)
-        surface.SetMaterial(SSG.mat)
-        surface.DrawTexturedRect(x, y + 36, w, h)
-    end
-end)
 
 -- ---------------------------------------------------------------------------
 -- ESP
@@ -13714,13 +13610,6 @@ local function BuildMenu()
         AddLabel(g, "Hides ESP, FOV circle, third person and")
         AddLabel(g, "this menu from render.Capture / jpeg")
         AddLabel(g, function() return "Captures hidden: " .. SSG.hidden end, C.accent)
-        AddCheck(g, "Grab alert", cfg.misc, "ssAlert", function(p)
-            AddCheck(p, "Shutter sound", cfg.misc, "ssSound")
-            AddCheck(p, "Show + save the grab", cfg.misc, "ssPreview")
-            AddLabel(p, "Saved to data/nyx/grabs/")
-        end)
-        AddLabel(g, function() return "Grabs seen: " .. SSG.grabs end, C.accent)
-        AddButton(g, "Show last grab", function() SSG.time = RealTime() end)
         EndGroup(g)
 
         local wm = cfg.watermark
