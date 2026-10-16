@@ -12,6 +12,10 @@ if NyxUnload then pcall(NyxUnload) end   -- re-running the file replaces the old
 local ID = "nyx_"
 local addedHooks = {}
 
+-- "a screengrab is being taken", defined with the anti-screengrab block; declared up here so
+-- every hook in the file (the extrapolation drawing too) sees the local, not a missing global
+local IsHidden
+
 local function AddHook(event, name, fn)
     hook.Add(event, ID .. name, fn)
     addedHooks[#addedHooks + 1] = {event, ID .. name}
@@ -85,6 +89,13 @@ local cfg = {
         ebLines     = 12,          -- advanced: strafe directions in the fan (each ducked + standing)
         ebSpread    = 180,         -- advanced: degrees either side of your flight the fan covers
         ebFanEvery  = 2,           -- advanced: the fan is searched every N ticks (it's the costly part)
+        -- edge skip: the edge bug, then instead of flying on, held on the end of the texture
+        edgeskip    = false,       -- bind it: hold
+        esTicks     = 12,          -- ticks ahead each hold variant is simulated
+        esMax       = 1.0,         -- seconds at most it keeps holding after the edge bug
+        -- fireman: ladder slide down at the fastest speed, jump off on the last tick
+        fireman     = false,       -- bind it: hold
+        fmBhop      = true,        -- jump again on landing so the jump-off speed isn't lost to friction
         -- texture bug (hackvshack texturebug.cpp)
         texturebug  = false,       -- bruteforce of tiny presses at the wall (bind it: hold)
         tbFwd1      = 0.1,         -- the two press strengths of your own tried first
@@ -106,16 +117,25 @@ local cfg = {
         pixelsurf   = false,
         psAlign     = true,        -- press onto the lip / keep the surf with your keys (auto align)
         psGain      = true,        -- surfing above 250 u/s: the press that keeps it and gains speed
-        psTicks     = 8,           -- ticks ahead the duck / stand check looks for the surf
+        psTicks     = 8,           -- ticks ahead the duck / stand check and the search look for the surf
+        psSearch    = true,        -- search presses that get you onto a lip from a few units off the wall
+        psReach     = 16,          -- the search runs while a wall is this close, units
+        psBudget    = 60,          -- presses the search simulates per tick
         -- pixel finder (lobotomy): where you can pixel surf, drawn on the walls
         psFinder    = true,
         psfKey      = KEY_N,       -- hold: mark a line on a wall, let go: scan it
         psfLive     = false,       -- scan the wall under the crosshair by itself
-        psfRange    = 64,          -- live: units above / below where you look
+        psfRange    = 64,          -- live / flat lines: units above / below the middle
+        psfLiveWidth = 128,        -- live: units along the wall each side of the crosshair
+        psfStep     = 16,          -- line: a column every this many units along it
+        psfBudget   = 3,           -- line: columns scanned per tick
         psfInset    = 0.02197,     -- how deep the hull sits in the wall (16 - 15.97803)
         psCalc      = true,        -- pixel surf calculator for the lip you look at
         psCalcHud   = true,        -- its panel next to the crosshair
         psCalcKey   = KEY_NONE,    -- hold on the ground: do the first jump that catches the lip
+        psHelper    = false,       -- pixel surf helper: jumps onto the lip for you (bind it: hold)
+        psHelperTicks = 64,        -- how far ahead each jump is simulated
+        psHelperRange = 500,       -- lips this close count when you don't look at one, units
         -- lobotomy's jumps (bind them: hold)
         minijump    = false,       -- jump + duck the tick you walk off an edge
         mjHoldDuck  = false,       -- keep the duck until landing
@@ -144,6 +164,43 @@ local cfg = {
         r = 255, g = 255, b = 255, -- box / text colour
         dormant     = true,        -- keep drawing players that left the PVS, at their last position
         dormantTime = 8,           -- seconds they stay visible, fading out
+    },
+    -- ESP layout (the ESP editor window): the side of the box each element sits on and its
+    -- place in that side's stack (1 = next to the box); side "off" = not drawn
+    espl = {
+        name     = {side = "top",    order = 1},
+        hpbar    = {side = "left",   order = 1},
+        hp       = {side = "left",   order = 2},
+        armorbar = {side = "off",    order = 1},
+        armor    = {side = "off",    order = 2},
+        weapon   = {side = "bottom", order = 1},
+        distance = {side = "bottom", order = 2},
+        ammo     = {side = "off",    order = 3},
+        ammobar  = {side = "off",    order = 4},
+        job      = {side = "off",    order = 5},
+        group    = {side = "off",    order = 6},
+        ping     = {side = "off",    order = 7},
+        money    = {side = "off",    order = 8},
+        flags    = {side = "right",  order = 1},
+    },
+    -- ESP colours per element; auto = the ESP colour (team / friend / dormant), and for the
+    -- health bar / number the green .. red of the health
+    espc = {
+        box      = {r = 255, g = 255, b = 255, auto = true},
+        name     = {r = 255, g = 255, b = 255, auto = true},
+        hpbar    = {r = 90,  g = 255, b = 90,  auto = true},
+        hp       = {r = 255, g = 255, b = 255, auto = true},
+        armorbar = {r = 70,  g = 140, b = 255, auto = false},
+        armor    = {r = 110, g = 170, b = 255, auto = false},
+        weapon   = {r = 255, g = 255, b = 255, auto = true},
+        distance = {r = 255, g = 255, b = 255, auto = true},
+        ammo     = {r = 255, g = 220, b = 120, auto = false},
+        ammobar  = {r = 255, g = 200, b = 60,  auto = false},
+        job      = {r = 200, g = 200, b = 255, auto = false},
+        group    = {r = 255, g = 120, b = 120, auto = false},
+        ping     = {r = 180, g = 180, b = 180, auto = false},
+        money    = {r = 120, g = 255, b = 120, auto = false},
+        flags    = {r = 255, g = 190, b = 70,  auto = false},
     },
     view = {
         thirdperson = false,
@@ -313,6 +370,16 @@ local cfg = {
         handAlpha    = 254,
         handR = 255, handG = 140, handB = 60,
     },
+    btchams = {                    -- the player's model drawn at his backtrack records
+        enabled      = false,
+        mode         = "aim",      -- aim (the record an aimbot shoots at) | last (the oldest) | all (a trail)
+        step         = 3,          -- all: every Nth record
+        targetOnly   = false,      -- only the player the aimbot is on
+        material     = "flat",
+        throughWalls = true,
+        alpha        = 110,
+        r = 120, g = 170, b = 255,
+    },
     bagspam = {                    -- presses use on the nearest item bag, every tick
         enabled = false,
         class   = "rust_itembag",  -- change with the console command  nyx_bag_class <class>
@@ -366,6 +433,11 @@ local cfg = {
         banner   = false,          -- big streak text at the top of the screen
         shake    = false,          -- short screen shake
         scorch   = false,          -- scorch mark on the floor (only you see it)
+        disint   = false,          -- the body lights up into glowing particles that scatter
+        dsCount  = 280,            -- particles in the body
+        dsHide   = true,           -- the ragdoll is hidden: the particles are all that is left
+        dsBeam   = true,           -- golden beam from you to the body
+        dsTint   = false,          -- particles in the effect colour instead of white
         sound    = "off",          -- off | a sound file
         ragdoll  = "off",          -- off | gold | ice | color | dissolve | neon | chrome | energy | void | pulse | selfillum
         rainbow  = false,
@@ -373,6 +445,34 @@ local cfg = {
         life     = 2.0,            -- seconds
         count    = 36,             -- sparks in the burst
         scale    = 1,
+    },
+    rain = {                       -- client-side rain around you (only you see it)
+        enabled  = false,
+        count    = 1500,           -- drops alive at once
+        radius   = 700,            -- around you, units
+        height   = 500,            -- drops start this far above your eyes
+        speed    = 900,            -- fall speed, u/s
+        speedVar = 0.25,           -- +- this share of the speed per drop
+        windYaw  = 45,             -- wind direction, degrees
+        wind     = 120,            -- wind speed, u/s
+        gust     = 0.3,            -- the wind breathes by this share
+        length   = 32,             -- streak length, units
+        width    = 1.2,            -- streak width, units
+        style    = "streak",       -- streak (soft, additive) | solid (flat, see-through)
+        r = 170, g = 190, b = 225, a = 120,
+        roof     = true,           -- no rain under a roof (only where the sky is above)
+        splash   = true,           -- a small splash where a drop lands
+        splashSize = 7,
+        sound    = "off",          -- off | a looping rain sound
+        volume   = 0.6,
+        darken   = 0.15,           -- the world darker and greyer, 0 = untouched
+    },
+    practice = {                   -- save a spot, teleport back to it (needs sv_cheats or your own server)
+        enabled  = false,
+        saveKey  = KEY_NONE,
+        tpKey    = KEY_NONE,
+        angles   = true,           -- the view goes back too
+        marker   = true,           -- a ring where the spot is
     },
     hits = {                       -- your hits on players
         marker   = true,           -- X around the crosshair
@@ -402,8 +502,23 @@ local cfg = {
     },
     backtrack = {                  -- both aimbots: shoot at where a player was a moment ago
         enabled = false,
-        ms      = 150,             -- how far back, the server accepts about 200 ms
+        ms      = 150,             -- backtrack time: how far back (the server alone allows ~200 ms)
         draw    = true,            -- dots on the records of the aim target
+        -- from ultimate ----------------------------------------------------------------------
+        mode    = "newest",        -- newest (nyx: newest first) | last (ultimate "Last ticks": the
+                                   -- oldest hittable one) | closest (nearest to you) | scan (every
+                                   -- one, oldest first, until one is in the open)
+        extended = false,          -- module v6: records past the server's window, through a
+                                   -- cl_interp told to the server for that shot (ultimate's way)
+        ignoreBreakLC = false,     -- keep the records of a player who jumps > 64 units per update
+        always  = false,           -- rage: only shoot records, never the live position
+    },
+    zx = {                         -- zxcmodule (gmcl_zxcmodule): used first wherever it covers something
+        enabled     = true,
+        predict     = true,        -- engine prediction around the aimbots (your shoot pos for this command)
+        noInterp    = false,       -- others drawn at their newest update, shots carry its tick
+        noSeqInterp = false,       -- no blending between animation sequences
+        animFix     = false,       -- others animate once per server update, over its choked ticks
     },
     rage = {
         enabled       = false,
@@ -510,6 +625,7 @@ local cfg = {
         h     = 520,
         x     = -1,                -- where the window was last (-1: centred)
         y     = -1,
+        layout = "",               -- groups moved by dragging their title (JSON: tab -> columns -> titles)
     },
     indicator = {                  -- speed number + short names of the active binds, under the crosshair
         enabled   = true,
@@ -737,6 +853,7 @@ local function ApplyResolver(ent)
 
         ent.ChatGestureWeight = 0
         ent:InvalidateBoneCache()
+        if istable(ded) and cfg.zx.enabled then ded.InvalidateBoneCache(ent) end
         ent:SetupBones()
         return
     end
@@ -781,6 +898,7 @@ local function ApplyResolver(ent)
     ent.ChatGestureWeight = 0      -- the chat gesture layer would drag the bones around
 
     ent:InvalidateBoneCache()
+    if istable(ded) and cfg.zx.enabled then ded.InvalidateBoneCache(ent) end
     ent:SetupBones()
 end
 
@@ -838,6 +956,19 @@ if not istable(nyxmod) then
     if installed then pcall(require, "nyx") end
 end
 
+-- zxcmodule (github.com/m4tt13/zxcmodule, lua/bin/gmcl_zxcmodule_win64.dll): its ded.* is used
+-- first for everything it covers - choke through bSendPacket, tick writes, simulation times,
+-- latency, net_SetConVar, spread prediction, engine prediction, interpolation and the anim fix.
+-- gmcl_nyx stays the fallback for all of it.
+if not istable(ded) then
+    local installed = not util.IsBinaryModuleInstalled or util.IsBinaryModuleInstalled("zxcmodule")
+    if installed then pcall(require, "zxcmodule") end
+end
+
+function BT.ZX()
+    return istable(ded) and cfg.zx.enabled
+end
+
 BT.M = {
     cmd = nil, cmdTries = 0, cmdMsg = "not probed",     -- CUserCmd offsets
     net = false, netNext = 0, netMsg = "not checked",   -- CanPacket hook
@@ -867,6 +998,8 @@ end
 
 -- the CanPacket hook, (re)installed every 2 s (a reconnect makes a new net channel)
 function BT.NetCheck()
+    if BT.ZX() then return true end
+
     local m = BT.M
     if not istable(nyxmod) then return false end
 
@@ -881,17 +1014,114 @@ function BT.NetCheck()
 end
 
 function BT.NetReady()
-    return istable(nyxmod) and BT.M.net
+    return BT.ZX() or (istable(nyxmod) and BT.M.net)
+end
+
+-- zxcmodule choke: whether this command goes out is decided once at the start of the tick
+-- (ded.SetBSendPacket); the limit comes from the fake lag manager (BT.zchoke), at most 14 in a
+-- row (the server's sv_maxusrcmdprocessticks would drop the rest)
+BT.zchoke, BT.zsend = 0, true
+
+function BT.DecideSend()
+    if not BT.ZX() then return end
+
+    local choked = ded.GetChokedCommands() or 0
+    local send = choked >= math.min(BT.zchoke or 0, 14)
+    BT.zsend = send
+    ded.SetBSendPacket(send)
+end
+
+-- the tick a live shot carries while interpolation is off: the target's newest update
+function BT.LiveTick(v)
+    if not (IsValid(v) and BT.ZX() and cfg.zx.noInterp) then return nil end
+    local sim = ded.GetSimulationTime(v)
+    return sim and BT.SimTick(sim)
+end
+
+-- net_SetConVar through whichever module has it
+function BT.NetSet(name, value)
+    if BT.ZX() then
+        ded.NetSetConVar(name, value)
+        return true, "ok (zxcmodule)"
+    end
+    if istable(nyxmod) and BT.M.net and nyxmod.NetSetConVar then return nyxmod.NetSetConVar(name, value) end
+    return false, "no module"
+end
+
+function BT.HasNetSet()
+    return BT.ZX() or (istable(nyxmod) and BT.M.net and nyxmod.NetSetConVar ~= nil)
+end
+
+function BT.ZXStatus()
+    if not istable(ded) then return "zxcmodule: not installed" end
+    if not cfg.zx.enabled then return "zxcmodule: loaded, off" end
+    return string.format("zxcmodule: on | choked %d | lat %.0f ms", ded.GetChokedCommands() or 0, (ded.GetLatency(0) or 0) * 1000)
 end
 
 -- true when the command being built now goes out in a packet (always true without the module)
 function BT.WillSend()
+    if BT.ZX() then return BT.zsend end
     if not BT.NetReady() then return true end
     return nyxmod.WillSend()
 end
 
+-- ultimate's interp backtrack: the server lag-compensates a shot to tick - its cl_interp, and
+-- only rewinds while |latency + cl_interp - age| < 0.2 s. Told a cl_interp of about the record's
+-- age (net_SetConVar, module v6; your own convar is untouched) it rewinds up to sv_maxunlag (1 s).
+-- Sent only when the value changes; the real one goes back 0.25 s after the last such shot.
+BT.sent, BT.sentAt, BT.pend = {}, 0, nil
+
+function BT.CanExtend()
+    return cfg.backtrack.extended and BT.HasNetSet() and not BT.extBroken
+end
+
+function BT.SendCvar(name, value)
+    if BT.sent[name] == value then return true end
+    if not BT.HasNetSet() then return false end
+
+    local ok, msg = BT.NetSet(name, value)
+    BT.extMsg = tostring(msg)
+    if ok then BT.sent[name] = value end
+    if not ok and string.find(BT.extMsg, "disabled", 1, true) then BT.extBroken = true end
+    return ok
+end
+
+function BT.RestoreInterp()
+    if not next(BT.sent) then return end
+
+    if BT.HasNetSet() then
+        for name in pairs(BT.sent) do
+            local cv = GetConVar(name)
+            if cv then BT.NetSet(name, cv:GetString()) end
+        end
+    end
+    BT.sent = {}
+end
+
+function BT.ExtStatus()
+    if not BT.HasNetSet() then return "extended: needs zxcmodule or gmcl_nyx v6" end
+    if BT.extBroken then return "extended: SendNetMsg failed, off" end
+    return "server cl_interp: " .. (BT.sent.cl_interp or "real")
+end
+
 -- tick_count for backtrack: GMod's own setter if this build has one, else the module
 function BT.SetTick(cmd, tick)
+    -- an extended record: the server gets its cl_interp before the tick means anything
+    local x = BT.pend and BT.pend[tick]
+    BT.pend = nil
+    if x then
+        BT.SendCvar("cl_interpolate", "1")
+        if not BT.SendCvar("cl_interp", string.format("%.4f", x)) then return false end
+        BT.sentAt = CurTime()
+    else
+        BT.RestoreInterp()
+    end
+
+    if BT.ZX() then
+        ded.SetCommandTick(cmd, tick)
+        return true
+    end
+
     if cmd.SetTickCount then
         cmd:SetTickCount(tick)
         return true
@@ -904,6 +1134,21 @@ end
 -- m_flSimulationTime of v (nil without the module / when the reader failed its check), plus
 -- {sim, prev}: the last two different values, how far apart his updates are
 function BT.SimTime(v)
+    if BT.ZX() then
+        if v:IsDormant() then return nil end
+        local sim = ded.GetSimulationTime(v)
+        if not sim or sim ~= sim then return nil end
+
+        local h = BT.simHist[v]
+        if not h then
+            h = {sim = sim, prev = sim}
+            BT.simHist[v] = h
+        elseif h.sim ~= sim then
+            h.prev, h.sim = h.sim, sim
+        end
+        return sim, h
+    end
+
     local m = BT.M
     if not istable(nyxmod) or m.ent == false then return nil end
 
@@ -946,7 +1191,8 @@ end
 
 -- one-way latency to the server
 function BT.Latency(ply)
-    local l = BT.NetReady() and nyxmod.Latency(0) or nil
+    local l
+    if BT.ZX() then l = ded.GetLatency(0) elseif BT.NetReady() then l = nyxmod.Latency(0) end
     if l then return l end
     return IsValid(ply) and ply:Ping() / 2000 or 0
 end
@@ -1284,6 +1530,9 @@ function BT.Record(me)
     if tick == BT.lastTick then return end
     BT.lastTick = tick
 
+    -- the real cl_interp back once no extended shot has needed the other one for a moment
+    if BT.sent.cl_interp and CurTime() - BT.sentAt > 0.25 then BT.RestoreInterp() end
+
     if not cfg.backtrack.enabled then
         if next(BT.recs) then BT.recs = setmetatable({}, {__mode = "k"}) end
         return
@@ -1310,7 +1559,7 @@ function BT.Record(me)
                 -- A teleport / respawn: the old records belong to somewhere else. With server
                 -- ticks known, 64 units is also where the server's lag compensation gives up
                 -- (it won't put a player back across a jump that large).
-                local limit = sim and 64 or 300
+                local limit = (sim and not cfg.backtrack.ignoreBreakLC) and 64 or 300
                 if last and last.origin:DistToSqr(origin) > limit * limit then list = {}; BT.recs[v] = list end
 
                 ApplyResolver(v)        -- no-op unless v is the resolver's current target
@@ -1321,44 +1570,53 @@ function BT.Record(me)
                     head = GetAimPos(v, "head", true),
                     chest = GetAimPos(v, "chest", true),
                     pelvis = GetAimPos(v, "pelvis", true),
+                    snap = MV.BTSnap and MV.BTSnap(v),      -- for backtrack chams
                 }
             end
 
-            while list[1] and now - list[1].time > 0.5 do table.remove(list, 1) end
+            local keep = math.max(0.5, cfg.backtrack.ms / 1000 + 0.3)
+            while list[1] and now - list[1].time > keep do table.remove(list, 1) end
         else
             BT.recs[v] = nil
         end
     end
 end
 
--- records of v that are still inside the window, newest first, at most `max` of them spread
--- evenly over it (the current tick is left out: that is the position the aimbot already has)
+-- How the server can be made to rewind v to rec (ultimate's IsTickHittable): "lerp" inside the
+-- window it allows by itself (|latency + lerp - age| < 0.2 s), "ext" through a cl_interp told to
+-- it (extended backtrack, up to ~1 s), nil when not at all. The newest record is the live
+-- position the aimbot already has, so it never counts.
+function BT.Hittable(rec, newest, now, nowTick)
+    local maxAge = cfg.backtrack.ms / 1000
+
+    if rec.sim and newest.sim then
+        if rec == newest or newest.sim - rec.sim > maxAge then return nil end
+
+        local out = BT.Latency(LocalPlayer())
+        if out > 1 then return nil end
+
+        local age = now - rec.sim
+        if math.abs(math.Clamp(out + BT.Lerp(), 0, 1) - age) < 0.2 then return "lerp" end
+        if BT.CanExtend() and age > 0 and age <= 0.95 then return "ext" end
+        return nil
+    end
+
+    if rec.tick < nowTick and now - rec.time <= maxAge then return "lerp" end
+    return nil
+end
+
+-- records of v that can be shot, newest first, at most `max` of them spread evenly
 function BT.List(v, max)
     local out = {}
     local list = BT.recs[v]
-    if not list then return out end
+    if not list or #list == 0 then return out end
 
     local now, nowTick = CurTime(), engine.TickCount()
-    local maxAge = cfg.backtrack.ms / 1000
-
-    -- server-tick records: the server restores a record only while
-    -- |(latency + lerp) - (server time - its simulation time)| < 0.2 s
     local newest = list[#list]
-    local correct = newest and newest.sim and math.Clamp(BT.Latency(LocalPlayer()) + BT.Lerp(), 0, 1)
 
     local eligible = {}
     for i = #list, 1, -1 do
-        local rec = list[i]
-        local ok
-
-        if rec.sim and correct then
-            -- the newest one is the live position the aimbot already has
-            ok = i < #list and newest.sim - rec.sim <= maxAge and math.abs(correct - (now - rec.sim)) < 0.2
-        else
-            ok = rec.tick < nowTick and now - rec.time <= maxAge
-        end
-
-        if ok then eligible[#eligible + 1] = rec end
+        if BT.Hittable(list[i], newest, now, nowTick) then eligible[#eligible + 1] = list[i] end
     end
 
     local stride = math.max(1, math.ceil(#eligible / max))
@@ -1367,12 +1625,48 @@ function BT.List(v, max)
     return out
 end
 
--- first record whose `hitbox` is in the open from shootPos and inside fovLimit of fwd:
--- position, tick, angle to the crosshair, distance
+-- A record whose `hitbox` is in the open from shootPos and inside fovLimit of fwd: position, the
+-- tick the shot has to carry, angle to the crosshair, distance. Which records are tried is the
+-- mode (ultimate's): newest - nyx's, newest first, up to 6 spread over the window; last - only the
+-- oldest hittable one ("Last ticks"); closest - only the one nearest to you; scan - every one,
+-- oldest first, until one is in the open.
 function BT.Find(ply, v, hitbox, shootPos, fwd, fovLimit)
-    if not cfg.backtrack.enabled then return end
+    local bt = cfg.backtrack
+    if not bt.enabled then return end
 
-    for _, rec in ipairs(BT.List(v, 6)) do
+    local list = BT.recs[v]
+    if not list or #list == 0 then return end
+
+    local now, nowTick = CurTime(), engine.TickCount()
+    local newest = list[#list]
+
+    local hit = {}                                 -- oldest first
+    for i = 1, #list do
+        local how = BT.Hittable(list[i], newest, now, nowTick)
+        if how and list[i][hitbox] then hit[#hit + 1] = {list[i], how} end
+    end
+    if #hit == 0 then return end
+
+    local tries
+    if bt.mode == "last" then
+        tries = {hit[1]}
+    elseif bt.mode == "closest" then
+        local best, bestD = nil, math.huge
+        for _, h in ipairs(hit) do
+            local d = h[1][hitbox]:DistToSqr(shootPos)
+            if d < bestD then best, bestD = h, d end
+        end
+        tries = {best}
+    elseif bt.mode == "scan" then
+        tries = hit
+    else
+        tries = {}
+        local stride = math.max(1, math.ceil(#hit / 6))
+        for i = #hit, 1, -stride do tries[#tries + 1] = hit[i] end
+    end
+
+    for _, h in ipairs(tries) do
+        local rec, how = h[1], h[2]
         local pos = rec[hitbox]
         local dir = pos - shootPos
         local dist = dir:Length()
@@ -1382,12 +1676,25 @@ function BT.Find(ply, v, hitbox, shootPos, fwd, fovLimit)
 
             local angle = math.deg(math.acos(math.Clamp(fwd:Dot(dir), -1, 1)))
             if angle <= fovLimit and IsVisible(ply, v, shootPos, pos) then
-                return pos, rec.tick, angle, dist
+                local tick
+                if how == "ext" then
+                    -- cl_interp = the record's age less the latency, so the server's rewind
+                    -- lands on it exactly (BT.SetTick sends it with the shot)
+                    local ti = engine.TickInterval()
+                    local x = math.max(BT.Lerp(), math.floor((now - BT.Latency(ply) - rec.sim) / ti + 0.5) * ti)
+                    tick = math.floor((rec.sim + x) / ti + 0.5)
+                    BT.pend = BT.pend or {}
+                    BT.pend[tick] = x
+                else
+                    tick = rec.sim and BT.SimTick(rec.sim) or rec.tick
+                end
+
+                if MV.btc then MV.btc.aim = {v = v, rec = rec, t = CurTime()} end    -- backtrack chams
+                return pos, tick, angle, dist
             end
         end
     end
 end
-
 local ALL_HITBOXES = {"head", "chest", "pelvis"}
 
 -- chosen hitbox first, the others only when fallback is on
@@ -1528,7 +1835,6 @@ local realAng = Angle(0, 0, 0)
 local sentAng = Angle(0, 0, 0)
 local silentDirty = false
 local menu = nil        -- menu frame, assigned in BuildMenu
-local IsHidden         -- "a screengrab is being taken", defined with the anti-screengrab block
 
 local cvAirAccel = GetConVar("sv_airaccelerate")
 
@@ -2069,7 +2375,7 @@ do
                 for i, st in ipairs(steps) do
                     out[i] = {duck = st[1], fm = st[2], sm = st[3], yaw = st[4], origin = Vector(st[5], st[6], st[7])}
                 end
-                return {steps = out, k = k, hits = 0, contact = Vector(s.x, s.y, s.z)}
+                return {steps = out, k = k, hits = 0, contact = Vector(s.x, s.y, s.z), sim = s}
             end
         end
     end
@@ -2539,23 +2845,113 @@ do
     end
 
     -- the keys held for up to `ticks` ticks reach the surf (-half gravity in the air)
+    -- (a real surf only: it has to hold two more ticks, see PS.Catches below)
     function PS.Reaches(base, duck, fm, sm, view, ticks, target)
-        local s = CloneSim(base)
-        for k = 1, ticks do
-            if SimTick(s, duck, fm, sm, view) ~= "air" then return nil end
-            if AtTarget(s.vz, target) then return k end
+        return PS.Catches(base, duck, fm, sm, view, ticks, target)
+    end
+
+    -- search ---------------------------------------------------------------------------
+    -- Catching the lip on your own is hard: you have to pass its height flush with the wall.
+    -- So before align (which only acts once the hull touches the wall) a search runs while a
+    -- wall is within `psReach`: presses into the wall (0 / 15 / 30 / 50 / 70 degrees off it,
+    -- both ways) x strengths (10 .. 450) x stand / duck, plus your own keys, each held for up to
+    -- `psTicks` ticks. Only a real surf counts - the tick that ends at -half gravity followed by
+    -- two more that stay there (an edge bug gives one and falls on). The press that caught is
+    -- kept as a world direction and tried first next tick; the list carries on from tick to
+    -- tick, `psBudget` presses per tick, the weakest presses (most speed kept) first.
+
+    -- the nearest wall the hull meets within `reach` (16 directions)
+    function PS.WallNear(ply, pos, mins, maxs, reach)
+        local bx, by, bf
+        for n = 0, 15 do
+            local a = n * math.pi / 8
+            local t = TraceXYZ(ply, pos.x, pos.y, pos.z, pos.x + math.cos(a) * reach, pos.y + math.sin(a) * reach, pos.z, mins, maxs)
+            if t.Hit and not t.StartSolid and math.abs(t.HitNormal.z) < 0.7 and (not bf or t.Fraction < bf) then
+                bx, by, bf = t.HitNormal.x, t.HitNormal.y, t.Fraction
+            end
         end
+        return bx, by
+    end
+
+    function PS.CandList()
+        if PS.cands then return PS.cands end
+        local list = {}
+        for _, f in ipairs({10, 30, 60, 120, 250, 450}) do
+            for _, off in ipairs({0, -15, 15, -30, 30, -50, 50, -70, 70}) do
+                for _, duck in ipairs({false, true}) do
+                    list[#list + 1] = {f = f, off = off, duck = duck}
+                end
+            end
+        end
+        PS.cands = list
+        return list
+    end
+
+    -- the keys held from base: the tick the surf starts on, when it then holds 2 more ticks
+    function PS.Catches(base, duck, fm, sm, view, ahead, target)
+        local s = CloneSim(base)
+        for k = 1, ahead do
+            if SimTick(s, duck, fm, sm, view) ~= "air" then return nil end
+            if AtTarget(s.vz, target) then
+                for _ = 1, 2 do
+                    if SimTick(s, duck, fm, sm, view) ~= "air" or not AtTarget(s.vz, target) then return nil end
+                end
+                return k
+            end
+        end
+    end
+
+    -- fm, sm, duck, tick, how - or nil
+    function PS.Search(cmd, base, nx, ny, view, target)
+        local m = cfg.move
+        local ahead = math.Clamp(math.floor(m.psTicks), 1, 16)
+        local intoYaw = math.deg(math.atan2(-ny, -nx))
+
+        local p = PS.plan
+        if p then
+            local f2, s2 = KeysToward(p.yaw, p.f)
+            local k = PS.Catches(base, p.duck, f2, s2, view, ahead, target)
+            if k then return f2, s2, p.duck, k, "holding" end
+            PS.plan = nil
+        end
+
+        local ownFm, ownSm, ownDuck = cmd:GetForwardMove(), cmd:GetSideMove(), cmd:KeyDown(IN_DUCK)
+        for _, d in ipairs({ownDuck, not ownDuck}) do
+            local k = PS.Catches(base, d, ownFm, ownSm, view, ahead, target)
+            if k then return ownFm, ownSm, d, k, d == ownDuck and "your keys" or "your keys + duck" end
+        end
+
+        local list = PS.CandList()
+        local n = #list
+        local budget = math.Clamp(math.floor(m.psBudget), 10, 400)
+        local start = PS.cursor or 0
+
+        for i = 0, math.min(budget, n) - 1 do
+            local idx = (start + i) % n
+            local c = list[idx + 1]
+            local yaw = intoYaw + c.off
+            local f2, s2 = KeysToward(yaw, c.f)
+            local k = PS.Catches(base, c.duck, f2, s2, view, ahead, target)
+
+            if k then
+                PS.cursor = idx
+                PS.plan = {yaw = yaw, f = c.f, duck = c.duck}
+                return f2, s2, c.duck, k, string.format("press %d @ %+d deg%s", c.f, c.off, c.duck and " ducked" or "")
+            end
+        end
+
+        PS.cursor = (start + math.min(budget, n)) % n
     end
 
     function PS.Run(cmd, ply, onGround, vz)
         local m = cfg.move
         if not m.pixelsurf then
-            PS.status, PS.duck = "idle", false
+            PS.status, PS.duck, PS.plan = "idle", false, nil
             return false
         end
 
         if onGround then
-            PS.status, PS.duck = "on the ground", false
+            PS.status, PS.duck, PS.plan = "on the ground", false, nil
             return false
         end
 
@@ -2574,6 +2970,24 @@ do
             else
                 cmd:AddKey(IN_DUCK)
                 acted = true
+            end
+        end
+
+        -- not on it yet, a wall close: the press that gets you onto a lip
+        if not surfing and m.psSearch then
+            local wx, wy = PS.WallNear(ply, pos, mins, maxs, math.Clamp(m.psReach, 1, 64))
+            if wx then
+                local f, s, d, k, how = PS.Search(cmd, NewSim(ply), wx, wy, view, target)
+                if f then
+                    cmd:SetForwardMove(f)
+                    cmd:SetSideMove(s)
+                    if d then cmd:AddKey(IN_DUCK) else cmd:RemoveKey(IN_DUCK) end
+                    PS.duck, PS.untilTick = d, now + k + 16
+                    PS.status = string.format("%s: surf in %d", how, k)
+                    return true
+                end
+            else
+                PS.plan = nil
             end
         end
 
@@ -2688,14 +3102,14 @@ do
     end
 
     -- pixel finder (lobotomy) ----------------------------------------------------------
-    -- Where a pixel surf is possible. Hold the finder key looking at a wall: that spot is the
-    -- start, looking up / down stretches a vertical line along the wall; let go and every
-    -- whole unit of the line is tried the way lobotomy does it: the hull put against the wall
+    -- Where a pixel surf is possible. Hold the finder key on a wall and draw a line (see the
+    -- line notes below PS.Scan); every whole unit of each column of it is tried the way
+    -- lobotomy does it: the hull put against the wall
     -- `psfInset` deep (15.97803 off the point: the trace's epsilon still lets it touch from
     -- there; just outside when that starts solid), its bottom 0.0287 above the unit, falling
     -- from rest with a press of 10 into the wall, one tick simulated. A tick that ends at
     -- -half gravity means a lip at that height you can surf on. Lips are drawn as lines along
-    -- the wall - green standing, cyan only with the ducked hull - until the next scan or Clear.
+    -- the wall - green standing, cyan only with the ducked hull - and kept until Clear.
     -- "Live" does the same by itself for the wall under the crosshair, +-psfRange around where
     -- you look, four times a second.
     PS.points = {}
@@ -2746,6 +3160,78 @@ do
         return out
     end
 
+    -- Lines in any direction and lips that stay. The line runs from where you pressed to where
+    -- you look now (along the wall, up / down, diagonal, round a corner). Let go and it is cut
+    -- into columns every `psfStep` units; each column finds the wall itself (a trace along the
+    -- start's normal), so every column has its own normal, and is scanned over the line's
+    -- height (at least +-psfRange round its middle when the line is flat). Columns go into a
+    -- queue, `psfBudget` of them per tick, so a long line doesn't freeze the game. Found lips
+    -- are kept (doubles skipped, up to 4000) until Clear, so every place you scanned shows at
+    -- once; Live keeps its own set, so it never wipes the saved ones.
+    PS.saved, PS.live, PS.seen, PS.jobs, PS.jobsDone = {}, {}, {}, {}, 0
+
+    function PS.Rebuild()
+        local all = {}
+        for _, p in ipairs(PS.saved) do all[#all + 1] = p end
+        for _, p in ipairs(PS.live) do all[#all + 1] = p end
+        PS.points = all
+    end
+
+    function PS.Keep(list)
+        local added = 0
+        for _, p in ipairs(list) do
+            local key = string.format("%d %d %d %s", math.floor(p.x), math.floor(p.y), p.z, tostring(p.duck))
+            if not PS.seen[key] then
+                PS.seen[key] = true
+                PS.saved[#PS.saved + 1] = p
+                added = added + 1
+            end
+        end
+
+        while #PS.saved > 4000 do table.remove(PS.saved, 1) end
+        return added
+    end
+
+    -- the line -> columns in the queue
+    function PS.QueueLine(l)
+        local m = cfg.move
+        local dx, dy = l.ex - l.sx, l.ey - l.sy
+        local dist = math.sqrt(dx * dx + dy * dy)
+        local step = math.Clamp(m.psfStep, 2, 64)
+        local n = math.min(math.floor(dist / step) + 1, 256)
+
+        local lo, hi = math.min(l.sz, l.ez), math.max(l.sz, l.ez)
+        local pad = math.Clamp(m.psfRange, 8, 512)
+        if hi - lo < pad * 2 then
+            local mid = (lo + hi) / 2
+            lo, hi = math.min(lo, mid - pad), math.max(hi, mid + pad)
+        end
+        local mid = (lo + hi) / 2
+
+        local len = math.sqrt(l.nx * l.nx + l.ny * l.ny)
+        if len < 1e-4 then return 0 end
+        local nx, ny = l.nx / len, l.ny / len
+        local queued = 0
+
+        for i = 0, n - 1 do
+            local t = n == 1 and 0 or i / (n - 1)
+            local x, y = l.sx + dx * t, l.sy + dy * t
+
+            -- the wall at this column: across the start's normal, at the line's middle height
+            local tr = util.TraceLine({
+                start = Vector(x + nx * 32, y + ny * 32, mid), endpos = Vector(x - nx * 32, y - ny * 32, mid),
+                filter = LocalPlayer(), mask = MASK_PLAYERSOLID,
+            })
+
+            if tr.Hit and not tr.StartSolid and math.abs(tr.HitNormal.z) < 0.7 then
+                PS.jobs[#PS.jobs + 1] = {x = tr.HitPos.x, y = tr.HitPos.y, nx = tr.HitNormal.x, ny = tr.HitNormal.y, z0 = lo, z1 = hi}
+                queued = queued + 1
+            end
+        end
+
+        return queued
+    end
+
     function PS.Finder(ply)
         local m = cfg.move
         if not m.psFinder then
@@ -2757,28 +3243,84 @@ do
             local tr = PS.AimTrace(ply)
             if not PS.line then
                 if tr.Hit and math.abs(tr.HitNormal.z) < 0.7 then
-                    PS.line = {x = tr.HitPos.x, y = tr.HitPos.y, z0 = tr.HitPos.z, z1 = tr.HitPos.z, nx = tr.HitNormal.x, ny = tr.HitNormal.y}
+                    local h = tr.HitPos
+                    PS.line = {sx = h.x, sy = h.y, sz = h.z, ex = h.x, ey = h.y, ez = h.z, nx = tr.HitNormal.x, ny = tr.HitNormal.y}
                     PS.fstatus = "marking the line"
                 end
             elseif tr.Hit then
-                PS.line.z1 = tr.HitPos.z        -- straight up / down over the start
+                PS.line.ex, PS.line.ey, PS.line.ez = tr.HitPos.x, tr.HitPos.y, tr.HitPos.z
             end
         elseif PS.line then
             local l = PS.line
             PS.line = nil
-            PS.points = PS.Scan(ply, l.x, l.y, l.z0, l.z1, l.nx, l.ny)
-            PS.fstatus = string.format("%d lips in %d units", #PS.points, math.floor(math.abs(l.z1 - l.z0)) + 1)
+            local q = PS.QueueLine(l)
+            PS.jobsTotal = (PS.jobsTotal or 0) + q
+            PS.fstatus = q > 0 and string.format("queued %d columns", q) or "no wall along the line"
         end
 
-        if m.psfLive and not PS.line and RealTime() >= (PS.nextLive or 0) then
-            PS.nextLive = RealTime() + 0.25
-            local tr = PS.AimTrace(ply)
+        -- the queue, a few columns per tick
+        local budget = math.Clamp(math.floor(m.psfBudget), 1, 32)
+        local added = 0
+        while budget > 0 and #PS.jobs > 0 do
+            local j = table.remove(PS.jobs, 1)
+            added = added + PS.Keep(PS.Scan(ply, j.x, j.y, j.z0, j.z1, j.nx, j.ny))
+            PS.jobsDone = PS.jobsDone + 1
+            budget = budget - 1
+        end
 
-            if tr.Hit and math.abs(tr.HitNormal.z) < 0.7 and tr.HitPos:DistToSqr(ply:EyePos()) < 1500 * 1500 then
-                local r = math.Clamp(m.psfRange, 8, 256)
-                PS.points = PS.Scan(ply, tr.HitPos.x, tr.HitPos.y, tr.HitPos.z - r, tr.HitPos.z + r, tr.HitNormal.x, tr.HitNormal.y)
-                PS.fstatus = string.format("live: %d lips", #PS.points)
+        if added > 0 or (PS.jobsTotal and PS.jobsTotal > 0) then
+            PS.Rebuild()
+            if #PS.jobs > 0 then
+                PS.fstatus = string.format("scanning %d / %d, %d lips", PS.jobsDone, PS.jobsTotal, #PS.saved)
+            else
+                PS.fstatus = string.format("%d lips saved", #PS.saved)
+                PS.jobsTotal, PS.jobsDone = 0, 0
             end
+        end
+
+        -- Live: a strip along the wall under the crosshair, `psfLiveWidth` units each way, cut
+        -- into columns like a line and scanned a few per tick; when a sweep is done its lips
+        -- replace the last sweep's and the next one starts from where you look then
+        if m.psfLive and not PS.line then
+            if not PS.liveJobs or (#PS.liveJobs == 0 and RealTime() >= (PS.nextLive or 0)) then
+                PS.liveJobs, PS.liveNext = {}, {}
+                local tr = PS.AimTrace(ply)
+
+                if tr.Hit and math.abs(tr.HitNormal.z) < 0.7 and tr.HitPos:DistToSqr(ply:EyePos()) < 1500 * 1500 then
+                    local h, n = tr.HitPos, tr.HitNormal
+                    local len = math.sqrt(n.x * n.x + n.y * n.y)
+                    local tx, ty = -n.y / len, n.x / len              -- along the wall
+                    local w = math.Clamp(m.psfLiveWidth, 0, 1024)
+
+                    -- the jobs go into the live queue, not the saved one
+                    local saved = PS.jobs
+                    PS.jobs = PS.liveJobs
+                    PS.QueueLine({sx = h.x - tx * w, sy = h.y - ty * w, sz = h.z, ex = h.x + tx * w, ey = h.y + ty * w, ez = h.z, nx = n.x, ny = n.y})
+                    PS.jobs = saved
+                    PS.liveTotal = #PS.liveJobs
+                end
+            end
+
+            local budget = math.Clamp(math.floor(m.psfBudget), 1, 32)
+            while budget > 0 and #PS.liveJobs > 0 do
+                local j = table.remove(PS.liveJobs, 1)
+                for _, p in ipairs(PS.Scan(ply, j.x, j.y, j.z0, j.z1, j.nx, j.ny)) do PS.liveNext[#PS.liveNext + 1] = p end
+                budget = budget - 1
+
+                if #PS.liveJobs == 0 then
+                    PS.live = PS.liveNext
+                    PS.nextLive = RealTime() + 0.1
+                    PS.Rebuild()
+                end
+            end
+
+            if #PS.jobs == 0 then
+                PS.fstatus = string.format("live %d (%d/%d cols), saved %d", #PS.live,
+                    (PS.liveTotal or 0) - #PS.liveJobs, PS.liveTotal or 0, #PS.saved)
+            end
+        elseif not m.psfLive and (#PS.live > 0 or PS.liveJobs) then
+            PS.live, PS.liveJobs, PS.liveNext = {}, nil, nil
+            PS.Rebuild()
         end
     end
 
@@ -2787,16 +3329,23 @@ do
     end
 
     function MV.PSClear()
-        PS.points, PS.line = {}, nil
+        PS.points, PS.saved, PS.live, PS.seen, PS.jobs, PS.line = {}, {}, {}, {}, {}, nil
+        PS.liveJobs, PS.liveNext = nil, nil
+        PS.jobsTotal, PS.jobsDone = 0, 0
         PS.fstatus = "cleared"
     end
 
     AddHook("PostDrawTranslucentRenderables", "pixelfinder", function(depth, sky)
         if sky or IsHidden() or not cfg.move.psFinder then return end
 
+        -- the line being marked, and the columns still waiting
         local l = PS.line
         if l then
-            render.DrawLine(Vector(l.x, l.y, l.z0), Vector(l.x, l.y, l.z1), Color(255, 255, 255), false)
+            render.DrawLine(Vector(l.sx, l.sy, l.sz), Vector(l.ex, l.ey, l.ez), Color(255, 255, 255), false)
+        end
+
+        for _, j in ipairs(PS.jobs) do
+            render.DrawLine(Vector(j.x, j.y, j.z0), Vector(j.x, j.y, j.z1), Color(255, 255, 255, 40), false)
         end
 
         for _, p in ipairs(PS.points) do
@@ -2807,6 +3356,7 @@ do
                 local cx, cy = p.x + nx * 0.5, p.y + ny * 0.5
                 local col = p.duck and Color(90, 200, 255) or Color(149, 184, 6)
                 if PS.calc and PS.calc.lip == p then col = Color(255, 220, 60) end     -- the calculator's lip
+                if PS.helper and PS.helper.lip == p then col = Color(255, 120, 40) end -- the helper's jump
 
                 render.DrawLine(Vector(cx + tx * 16, cy + ty * 16, p.z), Vector(cx - tx * 16, cy - ty * 16, p.z), col, false)
                 render.DrawLine(Vector(cx, cy, p.z), Vector(cx + nx * 6, cy + ny * 6, p.z), col, false)
@@ -3032,6 +3582,164 @@ do
         end
     end)
 
+    -- pixel surf helper --------------------------------------------------------------------
+    -- Jumps for you onto a lip the finder drew. Hold the key and run at the wall (don't jump
+    -- yourself): every ground tick "jump right now" is simulated in full - your keys turning
+    -- with your mouse, and once the hull is within 6 units of the lip's wall a press into it
+    -- (what the pixel surf's align does) - as a plain jump, a jump with duck from the next tick
+    -- (long jump) and, when you're crouched, a crouch jump. The jump tick uses the speed learned
+    -- from your own jumps (calculator). The first variant whose path ends a tick at -half
+    -- gravity on the lip is done this very tick, and afterwards its duck and its push into the
+    -- wall are held until the surf is caught; no variant: it waits, a tick later you're
+    -- somewhere else and it tries again. In the air the same from where you are, standing or
+    -- ducking now. The lip: the one you look at, else the nearest within range.
+    PS.hstatus = "idle"
+
+    function PS.HelperLip(ply)
+        local aimed = PS.AimedLip(ply)
+        if aimed then return aimed end
+
+        local pos = ply:GetPos()
+        local best, bestD = nil, cfg.move.psHelperRange ^ 2
+        for _, p in ipairs(PS.points) do
+            local dz = p.z - pos.z
+            local d = (p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2
+            if dz > -400 and dz < 90 and d < bestD then best, bestD = p, d end
+        end
+        return best
+    end
+
+    -- the lip's wall normal (flat, unit) and the yaw into the wall
+    function PS.LipNormal(p)
+        local len = math.sqrt(p.nx * p.nx + p.ny * p.ny)
+        if len < 1e-4 then return nil end
+        local nx, ny = p.nx / len, p.ny / len
+        return nx, ny, math.deg(math.atan2(-ny, -nx))
+    end
+
+    -- gap between the hull's face and the lip's wall plane
+    function PS.WallGap(s, p, nx, ny)
+        local hw = (s.ducked and s.dMax or s.sMax).x
+        return (s.x - p.x) * nx + (s.y - p.y) * ny - (math.abs(nx) + math.abs(ny)) * hw
+    end
+
+    -- after this tick the hull rides the lip p: -half gravity, at the lip's height, next to it
+    function PS.OnLip(s, p, target)
+        if not AtTarget(s.vz, target) or math.abs(s.z - p.z) > 1.5 then return false end
+        local hw = (s.ducked and s.dMax or s.sMax).x
+        local dx, dy = s.x - p.x, s.y - p.y
+        return dx * dx + dy * dy < (hw * 1.5 + 4) ^ 2
+    end
+
+    -- one variant: the tick it catches the lip on, or nil. duckAt: nil never, 0 the whole
+    -- time, k from tick k on.
+    function PS.Try(base, p, jump, duckAt, fm, sm, yaw, turn, ticks, target, ply)
+        local nx, ny, intoYaw = PS.LipNormal(p)
+        if not nx then return nil end
+
+        local s = CloneSim(base)
+        for k = 1, ticks do
+            local duck = duckAt ~= nil and k >= duckAt
+            local f, sd, y = fm, sm, yaw + turn * (k - 1)
+            if PS.WallGap(s, p, nx, ny) < 6 then f, sd, y = 10, 0, intoYaw end
+
+            if k == 1 and jump then
+                -- the jump tick: in the air from here, with the jump's speed (SimTick takes the
+                -- first half of the gravity off it before the move, as the engine does)
+                s.onGround = false
+                s.vz = PS.jumpVz or ply:GetJumpPower()
+            end
+
+            if SimTick(s, duck, f, sd, y) ~= "air" then return nil end
+            if PS.OnLip(s, p, target) then return k end
+        end
+    end
+
+    function PS.Helper(cmd, ply, onGround)
+        local m = cfg.move
+        if not m.psHelper then
+            PS.helper, PS.hstatus = nil, "idle"
+            return
+        end
+
+        local now = engine.TickCount()
+        local target = Target(ply)
+
+        -- a jump it made: hold its duck and its push into the wall until caught or over
+        local plan = PS.helper
+        if plan then
+            if now > plan.untilTick or (onGround and now > plan.jumpTick + 2) then
+                PS.helper, plan = nil, nil
+            else
+                if plan.duck and now >= plan.duckTick then cmd:AddKey(IN_DUCK) end
+
+                local nx, ny, intoYaw = PS.LipNormal(plan.lip)
+                if nx and PS.WallGap(NewSim(ply), plan.lip, nx, ny) < 6 then
+                    local f, sd = KeysToward(intoYaw, 10)
+                    cmd:SetForwardMove(f)
+                    cmd:SetSideMove(sd)
+                end
+
+                local vz = ply:GetVelocity().z
+                PS.hstatus = AtTarget(vz, target) and "on the lip" or string.format("%s, lip at tick %d", plan.name, plan.k)
+                return
+            end
+        end
+
+        if #PS.points == 0 then
+            PS.hstatus = "find lips first (finder / live)"
+            return
+        end
+
+        local lip = PS.HelperLip(ply)
+        if not lip then
+            PS.hstatus = "no lip in range"
+            return
+        end
+
+        local base = NewSim(ply)
+        local ticks = math.Clamp(math.floor(m.psHelperTicks), 8, 128)
+        local fm, sm, yaw, turn = cmd:GetForwardMove(), cmd:GetSideMove(), realAng.y, MV.yawRate or 0
+
+        local variants
+        if onGround then
+            variants = {
+                {name = "jump", jump = true},
+                {name = "jump + duck", jump = true, duckAt = 2},
+            }
+            if ply:Crouching() then table.insert(variants, 1, {name = "crouch jump", jump = true, duckAt = 0}) end
+        else
+            variants = {
+                {name = "standing", jump = false},
+                {name = "ducking", jump = false, duckAt = 1},
+            }
+        end
+
+        for _, v in ipairs(variants) do
+            local k = PS.Try(base, lip, v.jump, v.duckAt, fm, sm, yaw, turn, ticks, target, ply)
+            if k then
+                if v.jump then cmd:AddKey(IN_JUMP) end
+                if v.duckAt == 0 or v.duckAt == 1 then cmd:AddKey(IN_DUCK) end
+
+                PS.helper = {
+                    lip = lip, name = v.name, k = k, jumpTick = now,
+                    duck = v.duckAt ~= nil,
+                    duckTick = now + math.max((v.duckAt or 1) - 1, 0),
+                    untilTick = now + k + 16,
+                }
+                PS.hstatus = string.format("%s: lip at tick %d", v.name, k)
+                return
+            end
+        end
+
+        PS.hstatus = onGround and string.format("waiting for the spot (lip %+.0fu)", lip.z - ply:GetPos().z)
+            or "no catch from here"
+    end
+
+    function MV.PSHelperStatus()
+        return PS.hstatus
+    end
+
     -- mini jump / long jump (lobotomy) -------------------------------------------------
     -- long jump: ducks on the tick you jump and the first two ticks in the air (lobotomy ducks
     -- while the predicted flags say the ground was left at most 2 ticks ago; the jump tick
@@ -3126,8 +3834,8 @@ do
     local function RunEdgebug(cmd, ply, onGround, vz)
         local m = cfg.move
 
-        -- the advanced one works on its own bind as well
-        if not (m.edgebug or m.ebSteer) then
+        -- the advanced one and the edge skip work on their own binds as well
+        if not (m.edgebug or m.ebSteer or m.edgeskip) then
             MV.plan, MV.duckHold, MV.lines, MV.preview = nil, false, nil, nil
             return
         end
@@ -3157,7 +3865,39 @@ do
             if not st or ply:GetPos():DistToSqr(st.origin) > 4 then MV.plan = nil end
         end
 
-        if not MV.plan then Search(cmd, ply, m) end
+        -- a skip that drifted off its plan: planned again toward the same lip
+        if not MV.plan and m.edgeskip and MV.skipTarget and CurTime() - MV.skipTarget.t < 1 then
+            local sp, why = MV.SkipPlan(ply, nil, MV.skipTarget.z)
+            MV.SkipLog(sp, why)
+            MV.plan = sp
+        end
+
+        if not MV.plan then
+            -- edge skip: an edge it can't stop on is only tried again every other tick
+            if m.edgeskip and MV.skipWait and engine.TickCount() < MV.skipWait then
+                MV.status = "edge skip: no stop on this edge"
+                return
+            end
+
+            Search(cmd, ply, m)
+
+            -- Edge skip: the edge bug found is turned into a landing on its lip that stops there.
+            -- While it is on it never falls back to the edge bug itself - when no stop works it
+            -- leaves your keys alone and looks again as you get closer.
+            if MV.plan and m.edgeskip then
+                local sp, why = MV.SkipPlan(ply, MV.plan)
+                MV.SkipLog(sp, why)
+
+                if sp then
+                    MV.plan = sp
+                    MV.skipTarget = {z = sp.contact.z, t = CurTime()}
+                else
+                    MV.plan, MV.skipWait = nil, engine.TickCount() + 2
+                    MV.status = "edge skip: no stop on this edge"
+                    return
+                end
+            end
+        end
 
         plan = MV.plan
         if not plan then
@@ -3183,7 +3923,357 @@ do
         plan.hits = i
         MV.status = string.format("edge bug in %d ticks (%s)", plan.k - i + 1, plan.variant)
 
-        if i >= plan.k then MV.plan = nil end
+        if i >= plan.k then
+            -- the landing tick of an edge skip is out: from the next one it brakes you to a stop
+            if plan.skip then MV.skip = {x = plan.contact.x, y = plan.contact.y, z = plan.contact.z, t0 = CurTime()} end
+            MV.plan = nil
+        end
+    end
+
+    -- edge skip -------------------------------------------------------------------------------
+    -- Stops you on the last pixel of the edge an edge bug was found on, instead of bugging past
+    -- it. At the edge bug tick the hull already overhangs the lip with nearly all its speed, and
+    -- on the ground it would slide off before it could stop; so the speed has to go before that.
+    -- The edge bug's own inputs are flown up to a tick b, from there on the press is turned
+    -- against the flight (air braking: airaccelerate * wishspeed * tick per tick, so its strength
+    -- picks how hard), and the flight has to end in a landing on the lip's height. The ground
+    -- ticks after it are simulated too, braking exactly to 0 (friction + a press sized so the
+    -- speed reaches 0, not past it); a landing that slides off the edge doesn't count. Of those
+    -- that stop, the one that stops furthest along your flight - nearest the lip - is replayed
+    -- like an edge bug plan. If the real landing misses after all, every tick a set of hold
+    -- variants is simulated from where you are (standing / ducked x no keys and presses against
+    -- the flight up to 90 degrees to either side) and the best one's first tick is used.
+    -- (Fields on MV: this block shares the main chunk's 200 locals.)
+    MV.SKIP_OFFS = {false, 180, 150, -150, 120, -120, 90, -90}
+    MV.SKIP_F = {1, 0.75, 0.5, 0.25}       -- air brake strengths tried, of the full press
+    MV.esHits = 0
+
+    -- the press that brakes a sim on the ground to exactly 0: wish speed, yaw (0, nil: none)
+    function MV.SkipBrake(s)
+        local speed = math.sqrt(s.vx * s.vx + s.vy * s.vy)
+        local left = math.max(speed - math.max(speed, s.stopSpeed) * s.friction * s.dt, 0)
+        if speed < 1 or left < 0.1 then return 0, nil end
+
+        local w = math.min(left / (s.accel * s.dt), s.maxSpeed)
+        if s.ducked and s.duckSpeed > 0 then w = math.min(w / s.duckSpeed, s.maxSpeed) end
+        return w, math.deg(math.atan2(-s.vy, -s.vx))
+    end
+
+    -- from a sim that just landed: where it comes to a stop on the ground, nil when it slides off
+    function MV.SkipStops(s)
+        local c = CloneSim(s)
+
+        for _ = 1, 24 do
+            if c.vx * c.vx + c.vy * c.vy < 1 then return c.x, c.y end
+
+            local w, yaw = MV.SkipBrake(c)
+            if SimTick(c, c.ducked, w, 0, yaw or 0) ~= "ground" then return nil end
+        end
+    end
+
+    -- an edge skip plan made from the edge bug plan eb, or nil when no braking stops on the lip
+    -- Without eb (zTarget given): a skip already under way drifted off its plan. Once the braking
+    -- has started there is no edge bug left ahead to search for, so it is planned again from where
+    -- you are toward the same lip height, with no keys before the braking.
+    function MV.SkipPlan(ply, eb, zTarget)
+        local base = NewSim(ply)
+        local fl = math.sqrt(base.vx * base.vx + base.vy * base.vy)
+        if fl < 1 then return nil end
+
+        local fx, fy = base.vx / fl, base.vy / fl
+        local zE, k = eb and eb.contact.z or zTarget, eb and eb.k or 12
+        local noKey = {duck = base.ducked, fm = 0, sm = 0, yaw = 0}
+        local maxT = k + 16
+        local best, bestFwd
+        local why = {k = k, speed = fl, tried = 0, lip = 0, other = 0, stops = 0}
+
+        for b = k, 1, -1 do
+            local duckB = eb and eb.steps[b].duck or base.ducked
+
+            for _, f in ipairs(MV.SKIP_F) do
+                local s = CloneSim(base)
+                local steps = {}
+
+                for t = 1, maxT do
+                    local duck, fm, yaw, sm = duckB, 0, 0, 0
+
+                    if t < b then
+                        local st = eb and eb.steps[t] or noKey
+                        duck, fm, sm, yaw = st.duck, st.fm, st.sm, st.yaw
+                    elseif s.vx * s.vx + s.vy * s.vy > 1 then
+                        fm, yaw = f * s.maxSpeed, math.deg(math.atan2(-s.vy, -s.vx))
+                    end
+
+                    steps[t] = {duck, fm, sm, yaw, s.x, s.y, s.z}
+                    local r = SimTick(s, duck, fm, sm, yaw)
+
+                    if r == "land" then
+                        if math.abs(s.z - zE) <= 2 then
+                            why.lip = why.lip + 1
+                            local x, y = MV.SkipStops(s)
+                            local fwd = x and (x - base.x) * fx + (y - base.y) * fy
+                            if fwd then why.stops = why.stops + 1 end
+
+                            if fwd and (not bestFwd or fwd > bestFwd) then
+                                best, bestFwd = {steps = steps, land = Vector(s.x, s.y, s.z), b = b, f = f}, fwd
+                            end
+                        else
+                            why.other = why.other + 1
+                        end
+                        break
+                    end
+
+                    if r ~= "air" then break end
+                end
+
+                why.tried = why.tried + 1
+            end
+        end
+
+        if not best then return nil, why end
+
+        local out = {}
+        for i, st in ipairs(best.steps) do
+            out[i] = {duck = st[1], fm = st[2], sm = st[3], yaw = st[4], origin = Vector(st[5], st[6], st[7])}
+        end
+
+        why.best = bestFwd
+        return {
+            steps = out, k = #out, hits = 0, contact = best.land, skip = true,
+            variant = string.format("stop: brake %d%% from tick %d", best.f * 100, best.b),
+        }, why
+    end
+
+    -- one console line per search (at most twice a second), so a miss says why
+    function MV.SkipLog(sp, why)
+        if not why or RealTime() < (MV.skipLogAt or 0) then return end
+        MV.skipLogAt = RealTime() + 0.5
+
+        MsgC(sp and Color(149, 184, 6) or Color(255, 140, 60), "[nyx edgeskip] ",
+            Color(220, 220, 220), string.format(
+                "edge in %d ticks at %d u/s: %d tried, %d land on the lip, %d of them stop, %d land elsewhere%s\n",
+                why.k, why.speed, why.tried, why.lip, why.stops, why.other,
+                sp and string.format(" -> %s", sp.variant) or " -> no stop"))
+    end
+
+    function MV.SkipRun(cmd, ply, onGround, vz)
+        local sk, m = MV.skip, cfg.move
+        if not sk then return false end
+
+        if not m.edgeskip or CurTime() - sk.t0 > math.Clamp(m.esMax, 0.2, 3) or vz > 140 then
+            MV.skip = nil
+            return false
+        end
+
+        local s0 = NewSim(ply)
+        local speed = math.sqrt(s0.vx * s0.vx + s0.vy * s0.vy)
+        cmd:RemoveKey(IN_JUMP)
+
+        if onGround then
+            -- came down below the edge: there is nothing left to hold
+            if s0.z < sk.z - 4 then
+                MV.skip = nil
+                return false
+            end
+
+            -- speed left after this tick's friction, taken off by the press
+            local left = math.max(speed - math.max(speed, s0.stopSpeed) * s0.friction * s0.dt, 0)
+            if speed < 1 or left < 0.1 then
+                cmd:SetForwardMove(0)
+                cmd:SetSideMove(0)
+                MV.skip = nil
+                MV.status = "edge skip: held"
+                MV.skipTarget = nil
+                MV.esHits = MV.esHits + 1
+                MV.flashText, MV.flash = "edgeskip", CurTime()
+                return true
+            end
+
+            local w = math.min(left / (s0.accel * s0.dt), s0.maxSpeed)
+            if s0.ducked and s0.duckSpeed > 0 then w = math.min(w / s0.duckSpeed, s0.maxSpeed) end
+
+            local fm, sm = Rotate(w, 0, math.deg(math.atan2(-s0.vy, -s0.vx)), realAng.y)
+            cmd:SetForwardMove(fm)
+            cmd:SetSideMove(sm)
+            MV.status = "edge skip: braking"
+            return true
+        end
+
+        local yaw0 = speed > 1 and math.deg(math.atan2(s0.vy, s0.vx)) or realAng.y
+        local ticks = math.Clamp(math.floor(m.esTicks), 2, 32)
+        local best, bestScore
+
+        for _, duck in ipairs({s0.ducked, not s0.ducked}) do
+            for _, off in ipairs(MV.SKIP_OFFS) do
+                local s = CloneSim(s0)
+                local fm = off and 10000 or 0
+                local yaw = off and yaw0 + off or yaw0
+                local score
+
+                for t = 1, ticks do
+                    local r = SimTick(s, duck, fm, 0, yaw)
+                    if r == "stuck" then score = 1e6 break end
+
+                    if r == "land" or r == "ground" then
+                        score = s.z >= sk.z - 2 and t or 5000 + t
+                        break
+                    end
+                end
+
+                if not score then
+                    local dx, dy = s.x - sk.x, s.y - sk.y
+                    score = 1000 + math.sqrt(dx * dx + dy * dy) + math.max(0, sk.z - s.z) * 0.5
+                end
+
+                if not bestScore or score < bestScore then
+                    best, bestScore = {duck = duck, fm = fm, yaw = yaw}, score
+                end
+            end
+        end
+
+        if best.duck then cmd:AddKey(IN_DUCK) else cmd:RemoveKey(IN_DUCK) end
+
+        local fm, sm = Rotate(best.fm, 0, best.yaw, realAng.y)
+        cmd:SetForwardMove(fm)
+        cmd:SetSideMove(sm)
+
+        MV.status = bestScore < 1000 and string.format("edge skip: on the edge in %d", bestScore) or "edge skip: holding"
+        return true
+    end
+
+    -- fireman -----------------------------------------------------------------------------------
+    -- Source's LadderMove (SDK 2013) builds the wish velocity from the buttons and the view:
+    -- forward * climb + right * climb. Its part into / out of the ladder face is turned into
+    -- movement up / down the ladder, the rest stays as it is. So with the view pitched straight
+    -- down (forward = down) and turned so the right vector points away from the ladder, both
+    -- add up: climb * (sin 89 + ~1) = about twice the normal slide. The yaw is pulled back by
+    -- atan(cos 89) (~1 degree) so the little horizontal part of the pitched forward vector
+    -- cancels and you don't drift sideways off the ladder. The angle goes out silently.
+    -- Jump on a ladder throws you off along its face normal at 270 u/s - done on the last tick
+    -- that is still on it: the next move would reach the floor, or the ladder ends below you.
+    -- Then (fmBhop) jump is held back in the air and pressed on the landing tick, so friction
+    -- never gets the speed.
+    MV.fm = {status = "idle", jumps = 0}
+
+    -- face normal (x, y) of the ladder the hull is on, and whether it is a real CONTENTS_LADDER
+    -- brush; the last normal is tried first
+    function MV.LadderNormal(ply, pos, mins, maxs)
+        local F = MV.fm
+        F.tr = F.tr or {mask = MASK_PLAYERSOLID, output = {}}
+        local tr, out = F.tr, F.tr.output
+        tr.filter, tr.mins, tr.maxs, tr.start = ply, mins, maxs, pos
+
+        local bx, by, bf, blad
+
+        local function Probe(dx, dy)
+            tr.endpos = pos + Vector(dx * 8, dy * 8, 0)
+            util.TraceHull(tr)
+            if not out.Hit or out.StartSolid then return end
+
+            local lad = bit.band(out.Contents or 0, CONTENTS_LADDER) ~= 0
+            if not bf or (lad and not blad) or (lad == blad and out.Fraction < bf) then
+                local n = out.HitNormal
+                local len = math.sqrt(n.x * n.x + n.y * n.y)
+                if len > 0.1 then bx, by, bf, blad = n.x / len, n.y / len, out.Fraction, lad end
+            end
+        end
+
+        if F.nx then
+            Probe(-F.nx, -F.ny)
+            if blad then return bx, by, true end
+        end
+
+        for i = 0, 15 do
+            local a = i / 16 * math.pi * 2
+            Probe(math.cos(a), math.sin(a))
+        end
+
+        return bx, by, blad
+    end
+
+    -- true when it built this tick's command (the angle to send is left in MV.fmAng)
+    function MV.Fireman(cmd, ply)
+        MV.fmAng = nil
+        local m, F = cfg.move, MV.fm
+
+        if not m.fireman then
+            F.nx, F.boost, F.status = nil, nil, "idle"
+            return false
+        end
+
+        -- off the ladder after the jump: the landing bhop, everything else runs as usual
+        if F.boost and ply:GetMoveType() == MOVETYPE_WALK then
+            if CurTime() > F.boost or not m.fmBhop then
+                F.boost = nil
+            elseif ply:IsOnGround() then
+                cmd:AddKey(IN_JUMP)
+                F.boost = nil
+            else
+                cmd:RemoveKey(IN_JUMP)
+            end
+            return false
+        end
+
+        if ply:GetMoveType() ~= MOVETYPE_LADDER then
+            F.nx, F.status = nil, "not on a ladder"
+            return false
+        end
+
+        local pos = ply:GetPos()
+        local mins, maxs = ply:GetHull()
+        if ply:Crouching() then mins, maxs = ply:GetHullDuck() end
+
+        local nx, ny, strict = MV.LadderNormal(ply, pos, mins, maxs)
+        if not nx then
+            F.status = "ladder not found"
+            return false
+        end
+        F.nx, F.ny = nx, ny
+
+        local climb = ply.GetLadderClimbSpeed and ply:GetLadderClimbSpeed() or 200
+        local cp, sp = math.cos(math.rad(89)), math.sin(math.rad(89))
+        local step = climb * (sp + math.sqrt(1 + cp * cp)) * engine.TickInterval()
+
+        -- the last tick on the ladder: the floor is within the next move, or no ladder below
+        local tr, out = F.tr, F.tr.output
+        tr.start, tr.endpos = pos, pos - Vector(0, 0, step + 2)
+        util.TraceHull(tr)
+        local last = out.Hit and not out.StartSolid
+
+        if not last then
+            local below = pos - Vector(0, 0, step)
+            tr.start, tr.endpos = below, below - Vector(nx * 8, ny * 8, 0)
+            util.TraceHull(tr)
+            last = not out.Hit or out.StartSolid or (strict and bit.band(out.Contents or 0, CONTENTS_LADDER) == 0)
+        end
+
+        cmd:RemoveKey(IN_BACK)
+        cmd:RemoveKey(IN_MOVELEFT)
+        local away = math.deg(math.atan2(ny, nx))
+
+        if last then
+            cmd:RemoveKey(IN_FORWARD)
+            cmd:RemoveKey(IN_MOVERIGHT)
+            cmd:AddKey(IN_JUMP)
+            cmd:SetForwardMove(0)
+            cmd:SetSideMove(0)
+            MV.fmAng = Angle(0, away, 0)
+
+            F.boost = CurTime() + 1
+            F.jumps = F.jumps + 1
+            F.status = "jumped off"
+            return true
+        end
+
+        cmd:RemoveKey(IN_JUMP)
+        cmd:AddKey(IN_FORWARD)
+        cmd:AddKey(IN_MOVERIGHT)
+        cmd:SetForwardMove(10000)
+        cmd:SetSideMove(10000)
+        MV.fmAng = Angle(89, away + 90 - math.deg(math.atan(cp)), 0)
+
+        F.status = string.format("sliding %d u/s", math.floor(step / engine.TickInterval()))
+        return true
     end
 
     function MV.Status()
@@ -3198,7 +4288,13 @@ do
 
         PS.Finder(ply)                   -- works on the ground and on ladders too
 
+        if MV.Fireman(cmd, ply) then
+            MV.plan, MV.duckHold, MV.preview, MV.lines, MV.skip = nil, false, nil, nil, nil
+            return
+        end
+
         if ply:GetMoveType() ~= MOVETYPE_WALK or ply:WaterLevel() > 1 or ply:InVehicle() then
+            MV.skip = nil
             MV.plan, MV.duckHold, MV.preview, MV.lines = nil, false, nil, nil
             MV.prevVz, MV.prevAt = 0, false
             return
@@ -3211,6 +4307,7 @@ do
         PS.Jumps(cmd, ply, onGround)
         PS.Learn(ply, onGround, vz)
         PS.Calc(cmd, ply, onGround)
+        PS.Helper(cmd, ply, onGround)
 
         -- a real edge bug: at the signature after a faster fall, still in the air (+hg too:
         -- the texture bug can come out on that side)
@@ -3240,6 +4337,12 @@ do
             MV.atRun = 0
         end
         MV.prevVz, MV.prevAt = vz, at
+
+        -- an edge skip that is holding you owns the tick
+        if MV.SkipRun(cmd, ply, onGround, vz) then
+            MV.plan, MV.lines, MV.preview = nil, nil, nil
+            return
+        end
 
         -- texture bug first: when it set the keys it owns the tick
         if RunWallHang(cmd, ply, onGround, vz) or PS.Run(cmd, ply, onGround, vz) or RunTextureBug(cmd, ply, onGround, vz) then
@@ -3338,7 +4441,8 @@ do
 
         draw.SimpleTextOutlined(text, "NyxKillFxSmall", ScrW() / 2, y, col,
             TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, a))
-        draw.SimpleTextOutlined("x" .. (tb and MV.tbHits or MV.hits), "NyxESP", ScrW() / 2, y + 14, Color(225, 225, 225, a),
+        local count = tb and MV.tbHits or (MV.flashText == "edgeskip" and MV.esHits or MV.hits)
+        draw.SimpleTextOutlined("x" .. count, "NyxESP", ScrW() / 2, y + 14, Color(225, 225, 225, a),
             TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, a))
     end)
 end
@@ -3626,12 +4730,24 @@ do
             return ang
         end
 
+        local coneX = cone.x or cone[1] or 0
+        local coneY = cone.y or cone[2] or 0
+
+        -- zxcmodule: FireBullets' own roll for this command's random_seed (ded.PredictSpread gives
+        -- the shot's direction in the view frame; for the negated cone that is the correction)
+        if BT.ZX() and (coneX ~= 0 or coneY ~= 0) then
+            local dir = ded.PredictSpread(cmd, Vector(-coneX, -coneY, 0))
+            if dir then
+                local out = ang + dir:Angle()
+                out:Normalize()
+                NS.status = string.format("%s  cone %.4f (zxcmodule)", class, coneX)
+                return out
+            end
+        end
+
         local seed = NS.Seed(cmd:CommandNumber())
         local sd = NS.engineSpread[seed]
         if not sd then return ang end
-
-        local coneX = cone.x or cone[1] or 0
-        local coneY = cone.y or cone[2] or 0
         local x, y = sd[1], sd[2]
 
         local dir = ang:Forward() + (x * coneX * ang:Right() * -1) + (y * coneY * ang:Up() * -1)
@@ -3693,7 +4809,14 @@ local function DoAim(cmd, ply)
 
     if active and (shooting or autoFire or not (aim.silent and aim.fireOnly)) then
         local target, pos, tick = FindTarget(ply, realAng)
-        if IsValid(target) then aimPos, aimTick = pos, tick end
+        if IsValid(target) then
+            aimPos, aimTick = pos, tick
+            -- interpolation off (zxcmodule): the live shot carries his newest update's tick
+            if not tick then
+                local live = BT.LiveTick(target)
+                if live and (shooting or autoFire) then BT.SetTick(cmd, live) end
+            end
+        end
     end
 
     if not aimPos then return false end
@@ -4138,7 +5261,8 @@ local function DoRage(cmd, ply)
             -- open wins; the first that only goes through a wall is kept as a fallback
             local open = false
 
-            for _, base in ipairs(AW.Points(v, hitbox)) do
+            -- always backtrack (ultimate): the live position is never shot, only records
+            for _, base in ipairs(cfg.backtrack.always and {} or AW.Points(v, hitbox)) do
                 local pos = base + shift
                 local dir = pos - shootPos
                 local dist = dir:Length()
@@ -4166,7 +5290,7 @@ local function DoRage(cmd, ply)
 
             -- not hittable now: an older position of the same hitbox that was in the open
             -- (backtrack records only head / chest / pelvis)
-            if r.visOnly and HITBOX_BONE[hitbox] and (not pickPos or pickWall) then
+            if (r.visOnly or cfg.backtrack.always) and HITBOX_BONE[hitbox] and (not pickPos or pickWall) then
                 local bpos, btick, bangle, bdist = BT.Find(ply, v, hitbox, shootPos, fwd, r.fov)
 
                 if bpos then
@@ -4202,7 +5326,12 @@ local function DoRage(cmd, ply)
     lastAimPos, lastAimTime, lastAimWall, lastAimRage = bestPos, CurTime(), bestWall, true
 
     -- a record from the past: the shot carries that tick, so the server aims at that moment
+    -- (interpolation off through zxcmodule: the live shot carries his newest update's tick)
     lastAimBT = nil
+    if not bestTick then
+        local live = BT.LiveTick(bestEnt)
+        if live then BT.SetTick(cmd, live) end
+    end
     if bestTick and BT.SetTick(cmd, bestTick) then
         lastAimBT = (engine.TickCount() - bestTick) * engine.TickInterval() * 1000
     end
@@ -4449,6 +5578,11 @@ do
     end
 
     function MV.FakeLagStatus()
+        if BT.ZX() then
+            if BT.zstuck then return "zxcmodule: airstuck (CL_Move skipped)" end
+            return string.format("zxcmodule: choked %d  (limit %d)", ded.GetChokedCommands() or 0, BT.zchoke or 0)
+        end
+
         if BT.NetReady() then
             local held, holdMax = nyxmod.Held()
             if held > 0 then return string.format("module: airstuck %d / %d ticks", held, holdMax) end
@@ -4484,7 +5618,7 @@ do
             if aa.enabled and aa.desync and choke < 1 then choke = 1 end
 
             MV.modChoke = choke
-            nyxmod.SetChoke(choke)
+            if BT.ZX() then BT.zchoke = choke else nyxmod.SetChoke(choke) end
 
             local wants = choke > 0 or cfg.move.airstuck
             SetRate(wants and math.floor(1 / engine.TickInterval() + 0.5) or nil)
@@ -5680,11 +6814,14 @@ local function MainMove(cmd)
     -- module: CUserCmd layout check (before anything has changed the command)
     BT.ProbeCmd(cmd)
 
+    -- zxcmodule: does this command go out (fake lag / desync read it through BT.WillSend)
+    BT.DecideSend()
+
     -- Airstuck (module): every command is held back, so the server gets nothing to simulate you
     -- with and leaves you hanging where you are; after asMax seconds it lets go (the last 15
     -- commands go out and you carry on) until the key is pressed again. Movement is zeroed so
-    -- your own prediction doesn't wander off meanwhile.
-    if BT.NetReady() then
+    -- your own prediction doesn't wander off meanwhile. (zxcmodule: its CL_Move hook, below.)
+    if BT.NetReady() and not BT.ZX() then
         local stuck = cfg.move.airstuck and ply:Alive()
         if stuck ~= BT.M.stuck then
             nyxmod.SetHold(stuck, math.floor(math.Clamp(cfg.move.asMax, 0.2, 20) / engine.TickInterval()))
@@ -5715,11 +6852,25 @@ local function MainMove(cmd)
     DoMovement(cmd, ply)
     MV.Run(cmd, ply)            -- after bhop / strafes: it may put jump back and zero the strafe
 
+    -- fireman on a ladder: the view picks the climb direction there, so its angle goes out
+    -- (silently) and nothing else gets the tick
+    if MV.fmAng then
+        cmd:SetViewAngles(MV.fmAng)
+        sentAng, silentDirty = MV.fmAng, true
+        return
+    end
+
     -- picking the bag up comes first: it sets its own angle and presses use
     if BAG.Run(cmd, ply) then return end
 
     -- priority: rage shot > legit aimbot > anti-aim > real view
-    if DoRage(cmd, ply) or DoAim(cmd, ply) then return end
+    -- (zxcmodule: inside engine prediction, so your shoot position is this command's)
+    local pred = BT.ZX() and cfg.zx.predict
+    if pred then ded.StartPrediction(cmd) end
+    local ok, aimed = pcall(function() return DoRage(cmd, ply) or DoAim(cmd, ply) end)
+    if pred then ded.FinishPrediction() end
+    if not ok then error(aimed, 0) end
+    if aimed then return end
 
     -- your own shot with no aimbot: just the spread taken out of it
     if NS.Manual(cmd, ply, Inject) then return end
@@ -5728,6 +6879,60 @@ local function MainMove(cmd)
 
     Restore(cmd)
 end
+
+-- zxcmodule state and hooks ------------------------------------------------------------------
+-- Interpolation, sequence interpolation and the anim fix are module-wide switches: they follow
+-- the menu (and go back to the game's defaults when zxcmodule is turned off).
+-- Airstuck: while it holds, the CL_Move hook says "don't run" - no command is made or sent, the
+-- server has nothing to move you with - for at most asMax seconds per press.
+-- Anim fix: the other players animate only when a new server update of theirs came in, over as
+-- many ticks as it covers (ultimate's ShouldUpdateAnimation), so their bones match the server's.
+BT.zapplied = {}
+BT.animSim = setmetatable({}, {__mode = "k"})
+
+AddHook("Think", "zxcmodule", function()
+    if not istable(ded) then return end
+
+    local on = cfg.zx.enabled
+    local want = {
+        interp = not (on and cfg.zx.noInterp),
+        seq = not (on and cfg.zx.noSeqInterp),
+        anim = on and cfg.zx.animFix,
+    }
+    local a = BT.zapplied
+    if a.interp ~= want.interp then ded.SetInterpolation(want.interp); a.interp = want.interp end
+    if a.seq ~= want.seq then ded.SetSequenceInterpolation(want.seq); a.seq = want.seq end
+    if a.anim ~= want.anim then ded.EnableAnimFix(want.anim); a.anim = want.anim end
+
+    if not on then
+        if a.send ~= true then ded.SetBSendPacket(true); a.send = true end
+        BT.zstuck = false
+        return
+    end
+    a.send = nil
+
+    local ply = LocalPlayer()
+    local stuck = cfg.move.airstuck and IsValid(ply) and ply:Alive()
+    if stuck and not BT.zstuckSince then BT.zstuckSince = RealTime() end
+    if not stuck then BT.zstuckSince = nil end
+    BT.zstuck = stuck and RealTime() - BT.zstuckSince < math.Clamp(cfg.move.asMax, 0.2, 20)
+end)
+
+AddHook("CL_Move", "zxcmodule", function()
+    if BT.ZX() and BT.zstuck then return true end
+end)
+
+AddHook("ShouldUpdateAnimation", "zxcmodule", function(ply)
+    if not IsValid(ply) or ply == LocalPlayer() then return true, 1 end
+
+    local sim = ded.GetSimulationTime(ply)
+    local last = BT.animSim[ply]
+    if not sim or sim == last then return false, 1 end
+
+    BT.animSim[ply] = sim
+    local ticks = last and math.floor((sim - last) / engine.TickInterval() + 0.5) or 1
+    return true, math.Clamp(ticks, 1, 24)
+end)
 
 -- true while a taunt is playing and the view is first person: the gamemode would then swing the
 -- camera out to look at the model, which "hide taunts in first person" prevents
@@ -5936,9 +7141,9 @@ end)
 
 local ssHidden = false          -- true while a clean frame is being produced
 
--- captures that got the clean frame, for the menu (a table: the chunk is near its 200 locals)
+-- one table instead of new locals (the chunk is at 200)
 local SSG = {
-    hidden = 0,
+    hidden  = 0,                -- captures that got the clean frame
 }
 
 -- night mode / sky changes live in material parameters, so a grab needs them put back and
@@ -6066,6 +7271,253 @@ local function WeaponName(ply)
         name = wep:GetClass()
     end
     return name
+end
+
+-- ESP layout --------------------------------------------------------------------------------
+-- Every element sits on a side of the box (cfg.espl: top / bottom / left / right, an order in
+-- that side's stack, or off) in its own colour (cfg.espc). The player ESP and the ESP editor
+-- window draw through ESPL.Draw - the editor with made-up data, reading back where each
+-- element landed (hits) so it can be picked up and dragged. Bars on top / bottom lie flat,
+-- on the left / right they stand next to the box; text stacks outward (top / bottom) or
+-- downward in a column beside the bars (left / right). The old ESP switches (name, health
+-- bar, HP number, weapon, distance) still hide their element.
+local ESPL = {
+    ELEMENTS = {
+        {id = "box",      label = "Box",        kind = "box"},     -- the box itself: on (side "box") or off
+        {id = "name",     label = "Name",       kind = "text"},
+        {id = "hpbar",    label = "Health Bar", kind = "bar"},
+        {id = "hp",       label = "Health",     kind = "text"},
+        {id = "armorbar", label = "Armor Bar",  kind = "bar"},
+        {id = "armor",    label = "Armor",      kind = "text"},
+        {id = "weapon",   label = "Weapon",     kind = "text"},
+        {id = "ammo",     label = "Ammo",       kind = "text"},
+        {id = "ammobar",  label = "Ammo Bar",   kind = "bar"},
+        {id = "distance", label = "Distance",   kind = "text"},
+        {id = "job",      label = "Team / Job", kind = "text"},
+        {id = "group",    label = "Usergroup",  kind = "text"},
+        {id = "ping",     label = "Ping",       kind = "text"},
+        {id = "money",    label = "Money",      kind = "text"},
+        {id = "flags",    label = "Flags",      kind = "flags"},
+    },
+    LEGACY = {box = "box", name = "name", hpbar = "health", hp = "hpText", weapon = "weapon", distance = "distance"},
+    FAKE = {
+        name = "nyx", hpbar = 0.76, hp = "76", hpFrac = 0.76, armorbar = 0.5, armor = "50 ar",
+        weapon = "AK-47", ammo = "24 / 90", ammobar = 0.8, distance = "12m", job = "Citizen",
+        group = "admin", ping = "35ms", money = "$12,500", flags = {"duck", "target"},
+    },
+}
+ESPL.BYID = {}
+for _, e in ipairs(ESPL.ELEMENTS) do ESPL.BYID[e.id] = e end
+
+-- What each element shows for player v. Every element that is placed shows up, the same as in
+-- the editor: what the client can't know is shown as "-" / "?" / an empty bar instead of
+-- dropping the element (other players' clip isn't networked, armor 0, no DarkRP money ...).
+-- A dormant player's state is stale, so only what doesn't age (name, distance, team, group,
+-- flags) is shown for it.
+function ESPL.Data(v, metres, dormant)
+    local esp = cfg.esp
+    local d = {name = v:Nick(), distance = math.floor(metres) .. "m"}
+
+    if not dormant then
+        local hp = v:Health()
+        local maxHp = math.max(v:GetMaxHealth(), 100)
+        local frac = math.Clamp(hp / maxHp, 0, 1)
+        d.hpbar, d.hpFrac = frac, frac
+        if not (esp.hpHideFull and hp >= maxHp) then
+            d.hp = esp.hpPercent and (math.floor(frac * 100 + 0.5) .. "%") or tostring(math.max(hp, 0))
+        end
+
+        local ar = math.max(v:Armor(), 0)
+        d.armorbar, d.armor = math.Clamp(ar / 100, 0, 1), ar .. " ar"
+
+        d.weapon, d.ammo, d.ammobar = "-", "? / ?", 0
+        local wep = v:GetActiveWeapon()
+        if IsValid(wep) then
+            d.weapon = WeaponName(v) or "-"
+            local clip, maxClip = wep:Clip1(), wep:GetMaxClip1()
+            if clip >= 0 and maxClip > 0 then
+                d.ammo = clip .. " / " .. v:GetAmmoCount(wep:GetPrimaryAmmoType())
+                d.ammobar = math.Clamp(clip / maxClip, 0, 1)
+            elseif maxClip <= 0 then
+                d.ammo = "-"
+            end
+        end
+
+        d.ping = v:Ping() .. "ms"
+    end
+
+    local tn = team.GetName(v:Team())
+    d.job = (tn and tn ~= "") and tn or "-"
+    local ug = v:GetUserGroup()
+    d.group = (ug and ug ~= "") and ug or "user"
+    d.money = "-"
+    if v.getDarkRPVar then
+        local money = v:getDarkRPVar("money")
+        if isnumber(money) then d.money = "$" .. string.Comma(money) end
+    end
+
+    local f = {}
+    if dormant then f[#f + 1] = "dormant" end
+    if v:Crouching() then f[#f + 1] = "duck" end
+    if v:GetMoveType() == MOVETYPE_NOCLIP then f[#f + 1] = "noclip" end
+    if v:InVehicle() then f[#f + 1] = "vehicle" end
+    if v:IsTyping() then f[#f + 1] = "typing" end
+    if FR.IsTarget(v) then f[#f + 1] = "target" elseif FR.Is(v) then f[#f + 1] = "friend" end
+    if #f > 0 then d.flags = f end
+
+    return d
+end
+
+function ESPL.Color(id, base, d)
+    local c = cfg.espc[id]
+    if c and not c.auto then return Color(c.r, c.g, c.b, base.a) end
+    if (id == "hp" or id == "hpbar") and d.hpFrac then
+        return Color(255 * (1 - d.hpFrac), 255 * d.hpFrac, 0, base.a)
+    end
+    return base
+end
+
+-- the side an element is on (an old switch that is off counts as "off")
+function ESPL.Side(id)
+    if id == "box" then return cfg.esp.box and "box" or "off" end
+    local l = cfg.espl[id]
+    local leg = ESPL.LEGACY[id]
+    if not l or (leg and not cfg.esp[leg]) then return "off" end
+    return l.side
+end
+
+-- element lists per side, in their order
+function ESPL.Sides()
+    local sides = {top = {}, bottom = {}, left = {}, right = {}, off = {}, box = {}}
+    for _, e in ipairs(ESPL.ELEMENTS) do
+        local list = sides[ESPL.Side(e.id)] or sides.off
+        list[#list + 1] = e
+    end
+    for _, list in pairs(sides) do
+        table.sort(list, function(a, b)
+            return ((cfg.espl[a.id] or {}).order or 99) < ((cfg.espl[b.id] or {}).order or 99)
+        end)
+    end
+    return sides
+end
+
+-- x, y, w, h: the box. hits (optional) gets id -> {x, y, w, h} of what was drawn.
+function ESPL.Draw(x, y, w, h, d, base, outline, hits)
+    local sides = ESPL.Sides()
+    local LH = 12
+    surface.SetFont("NyxESP")
+
+    local function Rec(id, rx, ry, rw, rh)
+        if hits then hits[id] = {x = rx, y = ry, w = rw, h = rh} end
+    end
+
+    local function Text(s, tx, ty, col, ax, ay)
+        draw.SimpleTextOutlined(s, "NyxESP", tx, ty, col, ax, ay, 1, outline)
+        return surface.GetTextSize(s)
+    end
+
+    local function Lines(e, val)
+        return e.kind == "flags" and val or {val}
+    end
+
+    -- the box (an element too: the editor can take it away and give it its own colour)
+    if ESPL.Side("box") == "box" then
+        surface.SetDrawColor(COL_BOXBG.r, COL_BOXBG.g, COL_BOXBG.b, COL_BOXBG.a * base.a / 255)
+        surface.DrawOutlinedRect(x - 1, y - 1, w + 2, h + 2, 1)
+        surface.DrawOutlinedRect(x + 1, y + 1, w - 2, h - 2, 1)
+        surface.SetDrawColor(ESPL.Color("box", base, d))
+        surface.DrawOutlinedRect(x, y, w, h, 1)
+        Rec("box", x, y, w, h)
+    end
+
+    -- top: outward from the box's top edge
+    local off = 2
+    for _, e in ipairs(sides.top) do
+        local val = d[e.id]
+        if val ~= nil then
+            local col = ESPL.Color(e.id, base, d)
+            if e.kind == "bar" then
+                local by = y - off - 4
+                surface.SetDrawColor(COL_BOXBG)
+                surface.DrawRect(x - 1, by, w + 2, 4)
+                surface.SetDrawColor(col)
+                surface.DrawRect(x, by + 1, math.floor(w * val), 2)
+                Rec(e.id, x - 1, by, w + 2, 4)
+                off = off + 5
+            else
+                local lines, maxW = Lines(e, val), 0
+                for i = #lines, 1, -1 do
+                    maxW = math.max(maxW, Text(lines[i], x + w / 2, y - off, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM))
+                    off = off + LH
+                end
+                Rec(e.id, x + w / 2 - maxW / 2, y - off, maxW, LH * #lines)
+            end
+        end
+    end
+
+    -- bottom: outward from the bottom edge
+    off = 1
+    for _, e in ipairs(sides.bottom) do
+        local val = d[e.id]
+        if val ~= nil then
+            local col = ESPL.Color(e.id, base, d)
+            if e.kind == "bar" then
+                local by = y + h + off
+                surface.SetDrawColor(COL_BOXBG)
+                surface.DrawRect(x - 1, by, w + 2, 4)
+                surface.SetDrawColor(col)
+                surface.DrawRect(x, by + 1, math.floor(w * val), 2)
+                Rec(e.id, x - 1, by, w + 2, 4)
+                off = off + 5
+            else
+                local lines, maxW = Lines(e, val), 0
+                local top = y + h + off
+                for _, s in ipairs(lines) do
+                    maxW = math.max(maxW, Text(s, x + w / 2, y + h + off, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP))
+                    off = off + LH
+                end
+                Rec(e.id, x + w / 2 - maxW / 2, top, maxW, LH * #lines)
+            end
+        end
+    end
+
+    -- left / right: bars stand beside the box, text goes in a column beyond them
+    for _, side in ipairs({"left", "right"}) do
+        local dir = side == "left" and -1 or 1
+        local edge = side == "left" and x or x + w
+        local barOff = 1
+        local textY = y
+
+        for _, e in ipairs(sides[side]) do
+            local val = d[e.id]
+            if val ~= nil and e.kind == "bar" then
+                local col = ESPL.Color(e.id, base, d)
+                local bx = side == "left" and edge - barOff - 4 or edge + barOff
+                local fill = math.floor(h * val)
+                surface.SetDrawColor(COL_BOXBG)
+                surface.DrawRect(bx, y - 1, 4, h + 2)
+                surface.SetDrawColor(col)
+                surface.DrawRect(bx + 1, y + h - fill, 2, fill)
+                Rec(e.id, bx, y - 1, 4, h + 2)
+                barOff = barOff + 5
+            end
+        end
+
+        local tx = edge + dir * (barOff + 1)
+        for _, e in ipairs(sides[side]) do
+            local val = d[e.id]
+            if val ~= nil and e.kind ~= "bar" then
+                local col = ESPL.Color(e.id, base, d)
+                local lines, maxW = Lines(e, val), 0
+                local top = textY
+                for _, s in ipairs(lines) do
+                    maxW = math.max(maxW, Text(s, tx, textY, col, side == "left" and TEXT_ALIGN_RIGHT or TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP))
+                    textY = textY + LH
+                end
+                Rec(e.id, side == "left" and tx - maxW or tx, top, maxW, LH * #lines)
+            end
+        end
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -6778,6 +8230,9 @@ do
     end
 
     local defs = {
+        -- the model's own textures and lighting, no colour: only a marker for MV.ChamApply,
+        -- which takes the override off for it (with "through walls" you see the real model)
+        {"original",  "Original model", Made("original", "VertexLitGeneric", {["$basetexture"] = "vgui/white"}), true},
         {"flat",      "Flat",        Material(WHITE)},
         {"glow",      "Glow",        Made("glow", "UnlitGeneric", {["$basetexture"] = WHITE, ["$additive"] = 1})},
         {"wireframe", "Wireframe",   Material("models/wireframe")},
@@ -6866,6 +8321,24 @@ do
             if tint then MV.chamTint[mat] = tint end
         end
     end
+
+    MV.chamOrig = CHAMS_MATS.original
+end
+
+-- puts a chams look on whatever is drawn next; "original" leaves the model's own material and
+-- colour (white modulation) and keeps the engine's lighting
+function MV.ChamApply(mat, r, g, b)
+    if mat and mat == MV.chamOrig then
+        render.SuppressEngineLighting(false)
+        render.MaterialOverride(nil)
+        render.SetColorModulation(1, 1, 1)
+        return
+    end
+
+    MV.ChamTint(mat, r, g, b)
+    render.SuppressEngineLighting(not CHAMS_LIT[mat])
+    render.MaterialOverride(mat)
+    render.SetColorModulation(r / 255, g / 255, b / 255)
 end
 
 -- The colour of a material the modulation doesn't fully colour, from the same r, g, b the
@@ -6887,11 +8360,8 @@ function MV.ChamTint(mat, r, g, b)
 end
 
 local function DrawCham(ent, mat, r, g, b, alpha, ignoreZ)
-    MV.ChamTint(mat, r, g, b)
     cam.IgnoreZ(ignoreZ)
-    render.SuppressEngineLighting(not CHAMS_LIT[mat])
-    render.MaterialOverride(mat)
-    render.SetColorModulation(r / 255, g / 255, b / 255)
+    MV.ChamApply(mat, r, g, b)
     render.SetBlend(alpha / 255)
 
     ent:DrawModel()
@@ -6961,10 +8431,7 @@ do
             end
         end
 
-        MV.ChamTint(mat, r, g, b)      -- after the walls pass, which tinted it its own colour
-        render.SuppressEngineLighting(not CHAMS_LIT[mat])
-        render.MaterialOverride(mat)
-        render.SetColorModulation(r / 255, g / 255, b / 255)
+        MV.ChamApply(mat, r, g, b)     -- after the walls pass, which tinted it its own colour
         render.SetBlend(alpha / 255)
         active = true
     end)
@@ -6985,8 +8452,128 @@ do
     end)
 end
 
--- custom player model ------------------------------------------------------------------------
--- The player entity keeps its real model (so the aimbots' bones stay the server's hitboxes); a
+-- backtrack chams (ultimate's drawCSModels_backtrack) -----------------------------------------
+-- A hidden clientside model of the player's model is posed the way he was at a record (position,
+-- yaw, sequence, cycle, every pose parameter, written down with the record) and drawn with a
+-- chams material. "aim": the record an aimbot is shooting at; "last": the oldest record still
+-- inside the backtrack window; "all": a trail of them, fading with age.
+MV.btc = {ghosts = {}, aim = nil}
+
+function MV.BTSnap(v)
+    if not cfg.btchams.enabled then return nil end
+
+    local ra = v:GetRenderAngles() or v:GetAngles()
+    local snap = {
+        model = v:GetModel(), origin = v:GetPos(), yaw = ra.y, skin = v:GetSkin(),
+        sequence = v:GetSequence(), cycle = v:GetCycle(), poses = {},
+    }
+
+    for i = 0, v:GetNumPoseParameters() - 1 do
+        local name = v:GetPoseParameterName(i)
+        local lo, hi = v:GetPoseParameterRange(i)
+        if name and lo and hi then
+            snap.poses[name] = lo + v:GetPoseParameter(name) * (hi - lo)
+        end
+    end
+
+    return snap
+end
+
+-- the hidden model drawn for v
+function MV.btc.Ghost(v, model)
+    local g = MV.btc.ghosts[v]
+    if not IsValid(g) then
+        g = ClientsideModel(model, RENDERGROUP_OPAQUE)
+        if not IsValid(g) then return nil end
+        g:SetNoDraw(true)
+        MV.btc.ghosts[v] = g
+    end
+
+    if g:GetModel() ~= model then g:SetModel(model) end
+    return g
+end
+
+-- poses g as snap and draws it
+function MV.btc.Draw(g, snap, mat, a)
+    local c = cfg.btchams
+
+    g:SetPos(snap.origin)
+    g:SetAngles(Angle(0, snap.yaw, 0))
+    g:SetSkin(snap.skin or 0)
+    g:SetSequence(snap.sequence)
+    g:SetCycle(snap.cycle)
+    g:SetPlaybackRate(0)
+    for name, val in pairs(snap.poses) do g:SetPoseParameter(name, val) end
+
+    g:InvalidateBoneCache()
+    g:SetupBones()
+
+    DrawCham(g, mat, c.r, c.g, c.b, math.min(a, 254), c.throughWalls)
+end
+
+-- the records of v to draw, oldest first
+function MV.btc.Records(v)
+    local c = cfg.btchams
+
+    if c.mode == "aim" then
+        local aim = MV.btc.aim
+        if aim and aim.v == v and CurTime() - aim.t < 0.5 and aim.rec.snap then return {aim.rec} end
+        return {}
+    end
+
+    local all = {}
+    local list = BT.List(v, 64)                    -- newest first
+    for i = #list, 1, -1 do
+        if list[i].snap then all[#all + 1] = list[i] end
+    end
+
+    if c.mode == "last" then return {all[1]} end
+
+    local out, step = {}, math.max(1, math.floor(c.step))
+    for i = 1, #all, step do out[#out + 1] = all[i] end
+    return out
+end
+
+AddHook("PostDrawTranslucentRenderables", "btchams", function(depth, sky)
+    local c = cfg.btchams
+    if sky or not c.enabled or not cfg.backtrack.enabled or IsHidden() then return end
+
+    local me = LocalPlayer()
+    if not IsValid(me) then return end
+
+    local mat = CHAMS_MATS[c.material] or CHAMS_MATS.flat
+
+    for _, v in ipairs(player.GetAll()) do
+        if v == me or not v:Alive() or v:IsDormant() then continue end
+        if c.targetOnly and (v ~= aimTargetEnt or CurTime() - aimTargetTime > 1) then continue end
+
+        local recs = MV.btc.Records(v)
+        local here = v:GetPos()
+
+        for i, rec in ipairs(recs) do
+            local snap = rec.snap
+            -- a record where he stands now would only flicker inside his own model
+            if snap.origin:DistToSqr(here) > 1 then
+                local g = MV.btc.Ghost(v, snap.model)
+                if not g then break end
+
+                local a = c.alpha
+                if #recs > 1 then a = a * (0.3 + 0.7 * i / #recs) end
+                MV.btc.Draw(g, snap, mat, a)
+            end
+        end
+    end
+
+    -- ghosts of players who left
+    for v, g in pairs(MV.btc.ghosts) do
+        if not IsValid(v) then
+            if IsValid(g) then g:Remove() end
+            MV.btc.ghosts[v] = nil
+        end
+    end
+end)
+
+-- custom player model -------------------------------------------------------------------------- The player entity keeps its real model (so the aimbots' bones stay the server's hitboxes); a
 -- clientside model is bone-merged onto it and drawn in its place through RenderOverride. Swapping
 -- the player's own model with SetModel does not hold: the engine re-applies the networked model
 -- index, and gamemodes set it again on their own.
@@ -7332,10 +8919,7 @@ do
 
         local mat = CHAMS_MATS[c.handMaterial] or CHAMS_MATS.flat
 
-        MV.ChamTint(mat, c.handR, c.handG, c.handB)
-        render.SuppressEngineLighting(not CHAMS_LIT[mat])
-        render.MaterialOverride(mat)
-        render.SetColorModulation(c.handR / 255, c.handG / 255, c.handB / 255)
+        MV.ChamApply(mat, c.handR, c.handG, c.handB)
         render.SetBlend(math.min(c.handAlpha, 254) / 255)
     end
 
@@ -7773,6 +9357,9 @@ end
 local function RagdollRender(self)
     local fx = self.nyxFx
 
+    -- turned to particles: nothing is left to draw
+    if self.nyxHide and KFX.alive and not IsHidden() then return end
+
     if not KFX.alive or not fx or IsHidden() then
         self:DrawModel()
         return
@@ -7928,8 +9515,8 @@ local function Trigger(victim, name)
 
     local now = CurTime()
 
-    -- the game event and the kill feed both report the same kill
-    if lastVictim == name and now - lastVictimTime < 0.6 then return end
+    -- the game event, the kill feed and the hurt watch can all report the same kill
+    if lastVictim == name and now - lastVictimTime < 1.5 then return end
     lastVictim, lastVictimTime = name, now
 
     if now - lastKillTime < 4 then streak = streak + 1 else streak = 1 end
@@ -7997,6 +9584,40 @@ AddHook("AddDeathNotice", "killfx", function(attacker, attackerTeam, inflictor, 
     end
 
     Trigger(victim, victimName)
+end)
+
+-- The two above often never fire: many servers don't forward player_death to clients, and the
+-- base gamemode's kill feed calls GAMEMODE:AddDeathNotice directly (no hook). player_hurt does
+-- arrive (the hit log runs on it), so: a hurt of yours that leaves 0 health is a kill, and a
+-- player you hit in the last 1.5 s who is dead now is one too (servers that report the health
+-- late or not at all). Trigger drops the doubles.
+KFX.hitBy = {}
+
+AddHook("player_hurt", "killfx", function(data)
+    local me = LocalPlayer()
+    if not IsValid(me) or data.attacker ~= me:UserID() or data.userid == data.attacker then return end
+
+    local victim = Player(data.userid)
+    if not IsValid(victim) then return end
+
+    if data.health and data.health <= 0 then
+        KFX.hitBy[victim] = nil
+        Trigger(victim, victim:Nick())
+    else
+        KFX.hitBy[victim] = CurTime()
+    end
+end)
+
+AddHook("Think", "killfx_watch", function()
+    local now = CurTime()
+    for victim, t in pairs(KFX.hitBy) do
+        if not IsValid(victim) or now - t > 1.5 then
+            KFX.hitBy[victim] = nil
+        elseif not victim:Alive() or victim:Health() <= 0 then
+            KFX.hitBy[victim] = nil
+            Trigger(victim, victim:Nick())
+        end
+    end
 end)
 
 -- extra effects ------------------------------------------------------------------------------
@@ -8072,6 +9693,220 @@ function KFX.SpawnExtra(e, k, victim)
 
     if k.shake then util.ScreenShake(LocalPlayer():GetPos(), 6 * s, 30, 0.45, 2000) end
     if k.scorch then util.Decal("Scorch", ground + Vector(0, 0, 8), ground - Vector(0, 0, 16)) end
+    if k.disint then KFX.SpawnDisint(e, k, victim) end
+end
+
+-- disintegration ------------------------------------------------------------------------------
+-- The victim's hitbox boxes (the bones as they are at the kill) are filled with random points, so
+-- the particles start out as the body itself. They glow together for a moment, then crumble top
+-- first and scatter outward with drag, drifting down a little while they shrink and fade.
+function KFX.SpawnDisint(e, k, victim)
+    local s = k.scale
+    local n = math.Clamp(math.floor(k.dsCount or 280), 40, 800)
+    local me = LocalPlayer()
+    local base = IsValid(victim) and victim:GetPos() or e.ground
+    local boxes, total = {}, 0
+
+    if IsValid(victim) then
+        victim:SetupBones()
+        local set = victim:GetHitboxSet() or 0
+
+        for hb = 0, (victim:GetHitBoxCount(set) or 0) - 1 do
+            local bone = victim:GetHitBoxBone(hb, set)
+            local mins, maxs = victim:GetHitBoxBounds(hb, set)
+            local m = bone and victim:GetBoneMatrix(bone)
+
+            if m and mins and maxs then
+                local d = maxs - mins
+                -- volume^0.6: hands and the head still get their share next to the torso
+                total = total + math.max(d.x * d.y * d.z, 1) ^ 0.6
+                boxes[#boxes + 1] = {pos = m:GetTranslation(), ang = m:GetAngles(), mins = mins, maxs = maxs, cum = total}
+            end
+        end
+
+        -- bones that were never set up sit at the map origin
+        if boxes[1] and boxes[1].pos:DistToSqr(base) > 200 * 200 then boxes, total = {}, 0 end
+    end
+
+    local parts, c = {}, Vector(0, 0, 0)
+    local minZ, maxZ = math.huge, -math.huge
+
+    for i = 1, n do
+        local off
+
+        if #boxes > 0 then
+            local r, b = math.Rand(0, total), boxes[#boxes]
+            for _, bx in ipairs(boxes) do
+                if r <= bx.cum then b = bx break end
+            end
+
+            local lp = Vector(math.Rand(b.mins.x, b.maxs.x), math.Rand(b.mins.y, b.maxs.y), math.Rand(b.mins.z, b.maxs.z))
+            off = LocalToWorld(lp, angle_zero, b.pos, b.ang) - base
+        else
+            -- no hitboxes: a standing column the size of a player
+            local a, r = math.Rand(0, math.pi * 2), math.Rand(0, 11)
+            off = Vector(math.cos(a) * r, math.sin(a) * r, math.Rand(2, 72))
+        end
+
+        parts[i] = {off = off, size = math.Rand(2.5, 6) * s, ph = math.Rand(0, 6.28)}
+        c:Add(off)
+        minZ, maxZ = math.min(minZ, off.z), math.max(maxZ, off.z)
+    end
+
+    c:Div(n)
+    local span = math.max(maxZ - minZ, 1)
+
+    for _, p in ipairs(parts) do
+        local dir = p.off - c
+        dir.z = dir.z * 0.4
+        if dir:LengthSqr() < 0.01 then dir = VectorRand() end
+        dir:Normalize()
+
+        p.vel = dir * math.Rand(80, 260) * s + VectorRand() * math.Rand(20, 90) * s + Vector(0, 0, math.Rand(30, 140) * s)
+        -- the head goes first, the feet last
+        p.delay = (1 - (p.off.z - minZ) / span) * 0.25 + math.Rand(0, 0.08)
+    end
+
+    -- the preview stands your own model in for the victim, out in front of you
+    local anchor = victim == me and e.ground or base
+    local d = {anchor = anchor, parts = parts, c = c, col = Color(255, 255, 255)}
+    e.ds = d
+
+    -- Walls: players (and the ragdoll, once it shows up) are never hit. A few rays out of the
+    -- body as far as a particle can fly decide whether the per-frame traces are needed at all;
+    -- in the open the particles only stop on the floor.
+    d.filter = player.GetAll()
+    d.res = {}
+    d.tr = {mask = MASK_SOLID, filter = d.filter, output = d.res}
+
+    local mid, reach = anchor + c, 240 * s
+    for i = 0, 11 do
+        local a = i / 12 * math.pi * 2
+        for _, up in ipairs({0.15, 0.75}) do
+            d.tr.start, d.tr.endpos = mid, mid + Vector(math.cos(a), math.sin(a), up):GetNormalized() * reach
+            util.TraceLine(d.tr)
+            if d.res.Hit then d.walls = true end
+        end
+    end
+    d.tr.start, d.tr.endpos = mid, mid + Vector(0, 0, reach)
+    util.TraceLine(d.tr)
+    if d.res.Hit then d.walls = true end
+
+    -- the ragdoll shows up a moment after the death, so it is looked for a few times
+    if IsValid(victim) and victim ~= me then
+        local tries = 0
+
+        local function Try()
+            tries = tries + 1
+            local rag = IsValid(victim) and victim.GetRagdollEntity and victim:GetRagdollEntity() or nil
+
+            if IsValid(rag) then
+                d.filter[#d.filter + 1] = rag
+                if not k.dsHide then return end
+                rag.nyxHide = true
+                rag.RenderOverride = RagdollRender
+            elseif tries < 14 then
+                timer.Simple(0.05, Try)
+            end
+        end
+
+        Try()
+    end
+end
+
+function KFX.DrawDisint(e, t, k)
+    local d = e.ds
+    local life, s = k.life, k.scale
+    local hold = math.min(0.35, life * 0.2)
+    local inA = math.min(1, t / 0.08)
+    local anchor, col = d.anchor, d.col
+    local mid = anchor + d.c
+
+    -- golden beam from just under your view to the body, gone in 0.7 s
+    if k.dsBeam and t < 0.7 then
+        local a = 1 - t / 0.7
+        local ang = EyeAngles()
+        local from = EyePos() + ang:Forward() * 24 - ang:Up() * 14
+
+        render.SetMaterial(matBeam)
+        render.DrawBeam(from, mid, 18 * s * a, 0, 1, Color(255, 200, 80, 220 * a))
+        render.DrawBeam(from, mid, 6 * s * a, 0, 1, Color(255, 250, 220, 255 * a))
+    end
+
+    render.SetMaterial(matGlow)
+
+    -- bloom over the whole body while it is still in one piece
+    local bloom = inA * math.Clamp(1 - (t - hold) / 0.3, 0, 1)
+    if bloom > 0 then
+        for z = 6, 66, 12 do
+            render.DrawSprite(anchor + Vector(d.c.x, d.c.y, z), 64, 64, Color(255, 255, 255, 110 * bloom))
+        end
+    end
+
+    -- The flight is stepped once per frame (this hook can run more than once a frame): drag,
+    -- a little gravity, and near walls a trace along the step. A hit bounces the particle off
+    -- the surface - the part into the wall reversed and damped, the part along it kept, so it
+    -- skids along the wall.
+    local dt = math.Clamp(t - (d.lastT or t), 0, 0.05)
+    d.lastT = t
+    local drag = math.exp(-2.2 * dt)
+    local floorZ = e.ground.z + 1
+    local tr, res = d.tr, d.res
+
+    for i, p in ipairs(d.parts) do
+        local pt = t - hold - p.delay
+        local pos, a, size
+
+        if pt <= 0 then
+            -- whole: a faint shimmer in place
+            pos = anchor + p.off + Vector(0, 0, math.sin(t * 20 + p.ph) * 0.6)
+            a, size = inA, p.size * 1.6
+        else
+            if not p.pos then
+                p.pos, p.v = anchor + p.off, Vector(p.vel)
+            elseif dt > 0 then
+                local v = p.v
+                v:Mul(drag)
+                v.z = v.z - 50 * dt
+
+                local to = p.pos + v * dt
+
+                if d.walls and v:LengthSqr() > 100 then
+                    tr.start, tr.endpos = p.pos, to
+                    util.TraceLine(tr)
+
+                    if res.Hit and not res.StartSolid then
+                        local n = res.HitNormal
+                        local vn = n * v:Dot(n)
+                        p.v = (v - vn) * 0.6 - vn * 0.35
+                        to = res.HitPos + n * 1
+                    end
+                end
+
+                if to.z < floorZ then
+                    to.z = floorZ
+                    if p.v.z < 0 then p.v.z = -p.v.z * 0.3 end
+                end
+
+                p.pos = to
+            end
+
+            local q = math.Clamp(pt / math.max(life - hold - p.delay, 0.1), 0, 1)
+
+            pos = p.pos
+            a = (1 - q * q) * (0.75 + 0.25 * math.sin(t * 14 + p.ph))
+            size = p.size * (1.6 - 0.9 * q)
+        end
+
+        if a > 0 then
+            if k.dsTint then
+                render.DrawSprite(pos, size, size, FxColor(i, 255 * a))
+            else
+                col.a = 255 * a
+                render.DrawSprite(pos, size, size, col)
+            end
+        end
+    end
 end
 
 -- whatever an effect holds outside Lua (the ghost model) goes away with it
@@ -8091,6 +9926,8 @@ function KFX.Draw3DExtra(e, t, k)
     local life, s = k.life, k.scale
     local fade = math.Clamp(1 - t / life, 0, 1)
     local ground = e.ground
+
+    if e.ds then KFX.DrawDisint(e, t, k) end
 
     -- pillar: shoots up in 0.15 s, then thins out
     if k.pillar then
@@ -8410,6 +10247,440 @@ AddHook("HUDPaint", "killfx", function()
 end)
 end   -- kill effects
 
+-- rain ----------------------------------------------------------------------------------------
+-- Client-side only, built to be cheap:
+--  * Drops are plain numbers in parallel arrays (no table per drop), updated in one loop.
+--  * Every drop flies on a straight line: down at its speed, sideways by the wind slope (wind /
+--    fall speed, rounded to 0.02 so lines can be shared). Where such a line meets the sky and
+--    where it lands is traced once per 16 x 16 unit cell, per height band (128 units, your eye
+--    height picks it) and per slope, and kept in a cache; spawning a drop is then a table lookup.
+--    New cells are traced on a budget per frame, so a fresh area fills in over a few frames
+--    instead of stalling one. The cache is dropped when the settings that shape it change.
+--  * The sky is found by walking up the line through anything solid on the way (roofs), and the
+--    drop falls from there to the first thing it hits - a roof, a prop roof, the ground, water.
+--    So it rains on roofs and never inside: a room under a roof is simply not on any drop's way.
+--  * Drawing: drops behind you are skipped; drops close enough to be wider than ~1.5 pixels are
+--    camera-facing quads, all the others 1-pixel lines (a third of the work each). Both are
+--    one mesh each, one draw call. Only the main view draws (not the depth pass / skybox).
+-- (Fields on MV: the main chunk is at Lua's 200 locals.)
+MV.rain = {
+    X = {}, Y = {}, Z = {}, GZ = {}, SP = {}, SX = {}, SY = {}, LIVE = {}, n = 0,
+    cells = {}, cellCount = 0, sig = nil, budget = 0,
+    near = {}, far = {},
+    splashes = {}, frame = -1, pos = Vector(), col = Color(255, 255, 255),
+    trace = {output = {}},
+    CELL = 16, BAND = 128,
+    mats = {
+        streak = CreateMaterial("nyx_rain_streak", "UnlitGeneric", {
+            ["$basetexture"] = "effects/laser1", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
+            ["$additive"] = 1, ["$nocull"] = 1,
+        }),
+        solid = CreateMaterial("nyx_rain_solid", "UnlitGeneric", {
+            ["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
+            ["$translucent"] = 1, ["$nocull"] = 1,
+        }),
+        lineAdd = CreateMaterial("nyx_rain_lineadd", "UnlitGeneric", {
+            ["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
+            ["$additive"] = 1, ["$nocull"] = 1,
+        }),
+    },
+    splashMat = Material("sprites/light_glow02_add"),
+    cm = {
+        ["$pp_colour_addr"] = 0, ["$pp_colour_addg"] = 0, ["$pp_colour_addb"] = 0,
+        ["$pp_colour_brightness"] = 0, ["$pp_colour_contrast"] = 1, ["$pp_colour_colour"] = 1,
+        ["$pp_colour_mulr"] = 0, ["$pp_colour_mulg"] = 0, ["$pp_colour_mulb"] = 0,
+    },
+}
+
+-- the wind slope this frame (sideways units per unit of fall), rounded, and its cache key
+function MV.rain.Slope(c)
+    local t = CurTime()
+    local w = c.wind * (1 + c.gust * math.sin(t * 0.7) * math.sin(t * 1.9 + 1))
+    local a = math.rad(c.windYaw)
+    local qx = math.Round(math.cos(a) * w / math.max(c.speed, 1) * 50)
+    local qy = math.Round(math.sin(a) * w / math.max(c.speed, 1) * 50)
+    return qx / 50, qy / 50, (qx + 5000) * 10000 + (qy + 5000)
+end
+
+-- The cell's line: {skyZ, landZ}, false when no rain falls on it, nil when it isn't traced yet
+-- and this frame's trace budget is spent. The line goes through the cell's middle at the band's
+-- height; a point of it at height z is (px + sx * (zr - z), py + sy * (zr - z)).
+function MV.rain.Cell(c, ix, iy, band, sx, sy, skey)
+    local R = MV.rain
+    local per = R.cells[skey]
+    if not per then
+        per = {}
+        R.cells[skey] = per
+    end
+
+    local key = (ix + 4096) + (iy + 4096) * 8192 + (band + 256) * 67108864
+    local e = per[key]
+    if e ~= nil then return e end
+    if R.budget <= 0 then return nil end
+
+    local tr, out = R.trace, R.trace.output
+    local CELL = R.CELL
+    local px, py, zr = (ix + 0.5) * CELL, (iy + 0.5) * CELL, band * R.BAND + 64
+    local L = math.sqrt(sx * sx + sy * sy + 1)
+    local ux, uy, uz = -sx / L, -sy / L, 1 / L          -- up the line
+    local skyZ, sxp, syp, szp
+
+    e = false
+
+    if c.roof then
+        -- up the line until the sky; through a roof: on from where the trace leaves the solid
+        tr.mask = MASK_SOLID
+        sxp, syp, szp = px, py, zr
+
+        for _ = 1, 4 do
+            tr.start = Vector(sxp, syp, szp)
+            tr.endpos = Vector(sxp + ux * 32768, syp + uy * 32768, szp + uz * 32768)
+            util.TraceLine(tr)
+            R.budget = R.budget - 1
+
+            if out.StartSolid then
+                local f = out.FractionLeftSolid or 1
+                if f >= 1 then break end
+                local d = 32768 * f + 1
+                sxp, syp, szp = sxp + ux * d, syp + uy * d, szp + uz * d
+            elseif out.HitSky then
+                skyZ = out.HitPos.z - 4
+                break
+            elseif out.Hit then
+                local h = out.HitPos
+                sxp, syp, szp = h.x + ux, h.y + uy, h.z + uz
+            else
+                break
+            end
+        end
+    else
+        skyZ = zr + c.height
+    end
+
+    if skyZ then
+        -- down the line from the sky to the first thing it meets
+        local d = zr - skyZ
+        tr.mask = bit.bor(MASK_SOLID, CONTENTS_WATER)
+        tr.start = Vector(px + sx * d, py + sy * d, skyZ)
+        tr.endpos = tr.start - Vector(ux, uy, uz) * 32768
+        util.TraceLine(tr)
+        R.budget = R.budget - 1
+
+        if out.Hit and not out.StartSolid and out.HitPos.z < skyZ then
+            e = {skyZ, out.HitPos.z}
+        end
+    end
+
+    per[key] = e
+    R.cellCount = R.cellCount + 1
+    return e
+end
+
+-- (re)starts drop i somewhere around eye; spread: anywhere along its fall instead of at the top
+function MV.rain.Spawn(c, i, eye, sx, sy, skey, spread)
+    local R = MV.rain
+    local CELL = R.CELL
+    local a, rr = math.Rand(0, math.pi * 2), c.radius * math.Rand(0, 1) ^ 0.75
+    local ix = math.floor((eye.x + math.cos(a) * rr) / CELL)
+    local iy = math.floor((eye.y + math.sin(a) * rr) / CELL)
+    local band = math.floor(eye.z / R.BAND)
+
+    R.LIVE[i] = false
+
+    local e = R.Cell(c, ix, iy, band, sx, sy, skey)
+    if not e then return end
+
+    local top = math.min(eye.z + c.height, e[1])
+    local gz = e[2]
+    if top <= gz + 1 then return end
+
+    local z = top
+    if spread then z = gz + (top - gz) * math.Rand(0, 1) end
+
+    -- on the cell's line, a little jitter so the grid doesn't show
+    local zr = band * R.BAND + 64
+    R.X[i] = (ix + 0.5) * CELL + sx * (zr - z) + math.Rand(-3, 3)
+    R.Y[i] = (iy + 0.5) * CELL + sy * (zr - z) + math.Rand(-3, 3)
+    R.Z[i], R.GZ[i] = z, gz
+    R.SX[i], R.SY[i] = sx, sy
+    R.SP[i] = c.speed * (1 + math.Rand(-c.speedVar, c.speedVar))
+    R.LIVE[i] = true
+end
+
+function MV.rain.Step(c, eye, dt)
+    local R = MV.rain
+    local X, Y, Z, GZ, SP, SX, SY, LIVE = R.X, R.Y, R.Z, R.GZ, R.SP, R.SX, R.SY, R.LIVE
+    local n = math.Clamp(math.floor(c.count), 0, 6000)
+    local sx, sy, skey = R.Slope(c)
+    local now = CurTime()
+    local far = (c.radius * 1.25) ^ 2
+    local ex, ey = eye.x, eye.y
+    local spawn = R.Spawn
+
+    -- the cache depends on these; anything else changing keeps it
+    local sig = (c.roof and "r" or "o") .. (c.roof and "" or c.height)
+    if sig ~= R.sig or R.cellCount > 120000 then
+        R.cells, R.cellCount, R.sig = {}, 0, sig
+    end
+
+    R.budget = 80
+    R.trace.filter = player.GetAll()
+
+    for i = R.n + 1, n do spawn(c, i, eye, sx, sy, skey, true) end
+    for i = n + 1, R.n do LIVE[i] = nil end
+    R.n = n
+
+    -- drops waiting for a place: a few hundred tries a frame (lookups, the traces are budgeted)
+    local tries = 300
+    local splash = c.splash and #R.splashes < 200
+
+    for i = 1, n do
+        if LIVE[i] then
+            local fall = SP[i] * dt
+            local z = Z[i] - fall
+            local x, y = X[i] + SX[i] * fall, Y[i] + SY[i] * fall
+
+            if z <= GZ[i] then
+                if splash then
+                    R.splashes[#R.splashes + 1] = {Vector(x, y, GZ[i] + 1), now}
+                    splash = #R.splashes < 200
+                end
+                spawn(c, i, eye, sx, sy, skey, false)
+            elseif (x - ex) * (x - ex) + (y - ey) * (y - ey) > far then
+                spawn(c, i, eye, sx, sy, skey, false)
+            else
+                X[i], Y[i], Z[i] = x, y, z
+            end
+        elseif tries > 0 then
+            tries = tries - 1
+            spawn(c, i, eye, sx, sy, skey, false)
+        end
+    end
+
+    local s = R.splashes
+    for i = #s, 1, -1 do
+        if now - s[i][2] > 0.22 then table.remove(s, i) end
+    end
+end
+
+function MV.rain.Draw(c, eye)
+    local R = MV.rain
+    local X, Y, Z, SP, SX, SY, LIVE = R.X, R.Y, R.Z, R.SP, R.SX, R.SY, R.LIVE
+    local near, far = R.near, R.far
+    local nn, nf = 0, 0
+
+    local fwd = EyeAngles():Forward()
+    local fx, fy, fz = fwd.x, fwd.y, fwd.z
+    local ex, ey, ez = eye.x, eye.y, eye.z
+    local len = c.length
+    local half = c.width * 0.5
+
+    -- one pixel in units at distance 1; quads only while a drop is wider than ~1.5 pixels
+    local fov = render.GetViewSetup and render.GetViewSetup().fov or 90
+    local pxUnit = 2 * math.tan(math.rad(math.Clamp(fov, 10, 170) / 2)) / ScrH()
+    local nearMax = half / (pxUnit * 1.5)
+    nearMax = nearMax * nearMax
+
+    for i = 1, R.n do
+        if LIVE[i] then
+            local rx, ry, rz = X[i] - ex, Y[i] - ey, Z[i] - ez
+            if rx * fx + ry * fy + rz * fz > -len then
+                if rx * rx + ry * ry + rz * rz < nearMax then
+                    nn = nn + 1
+                    near[nn] = i
+                else
+                    nf = nf + 1
+                    far[nf] = i
+                end
+            end
+        end
+    end
+
+    local r, g, b, a = c.r, c.g, c.b, c.a
+    local tailA = a * 0.25
+    local v = R.pos
+    local Position, Color_, Advance, TexCoord = mesh.Position, mesh.Color, mesh.AdvanceVertex, mesh.TexCoord
+
+    -- far: 1-pixel lines, tail -> head
+    if nf > 0 then
+        render.SetMaterial(c.style == "solid" and R.mats.solid or R.mats.lineAdd)
+        mesh.Begin(MATERIAL_LINES, nf)
+
+        for k = 1, nf do
+            local i = far[k]
+            local L = len / math.sqrt(SX[i] * SX[i] + SY[i] * SY[i] + 1)
+            local x, y, z = X[i], Y[i], Z[i]
+
+            v.x, v.y, v.z = x - SX[i] * L, y - SY[i] * L, z + L
+            Position(v) Color_(r, g, b, tailA) Advance()
+            v.x, v.y, v.z = x, y, z
+            Position(v) Color_(r, g, b, a) Advance()
+        end
+
+        mesh.End()
+    end
+
+    -- near: camera-facing quads
+    if nn > 0 then
+        render.SetMaterial(R.mats[c.style] or R.mats.streak)
+        mesh.Begin(MATERIAL_QUADS, nn)
+
+        for k = 1, nn do
+            local i = near[k]
+            local sxl, syl = SX[i], SY[i]
+            local l = math.sqrt(sxl * sxl + syl * syl + 1)
+            local dx, dy, dz = sxl / l, syl / l, -1 / l
+            local x, y, z = X[i], Y[i], Z[i]
+            local tx, ty, tz = x - dx * len, y - dy * len, z - dz * len
+
+            -- across the streak, facing the eye
+            local qx, qy, qz = ex - x, ey - y, ez - z
+            local sx, sy, sz = dy * qz - dz * qy, dz * qx - dx * qz, dx * qy - dy * qx
+            local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
+            if sl < 0.001 then sl, sx = 1, 1 end
+            sl = half / sl
+            sx, sy, sz = sx * sl, sy * sl, sz * sl
+
+            v.x, v.y, v.z = tx - sx, ty - sy, tz - sz
+            Position(v) TexCoord(0, 0, 0) Color_(r, g, b, tailA) Advance()
+            v.x, v.y, v.z = tx + sx, ty + sy, tz + sz
+            Position(v) TexCoord(0, 0, 1) Color_(r, g, b, tailA) Advance()
+            v.x, v.y, v.z = x + sx, y + sy, z + sz
+            Position(v) TexCoord(0, 1, 1) Color_(r, g, b, a) Advance()
+            v.x, v.y, v.z = x - sx, y - sy, z - sz
+            Position(v) TexCoord(0, 1, 0) Color_(r, g, b, a) Advance()
+        end
+
+        mesh.End()
+    end
+
+    local s = R.splashes
+    if c.splash and #s > 0 then
+        local now = CurTime()
+        local col = R.col
+        col.r, col.g, col.b = r, g, b
+        render.SetMaterial(R.splashMat)
+
+        for k = 1, #s do
+            local f = (now - s[k][2]) / 0.22
+            local size = c.splashSize * (0.4 + f)
+            col.a = a * (1 - f)
+            render.DrawSprite(s[k][1], size, size * 0.6, col)
+        end
+    end
+end
+
+-- the looping sound follows the menu: path, volume, on / off
+function MV.rain.Sound(c)
+    local R = MV.rain
+    local want = c.enabled and c.sound ~= "off" and c.sound or nil
+
+    if R.sndPath ~= want then
+        if R.snd then R.snd:Stop() end
+        R.snd, R.sndPath = nil, want
+
+        local me = LocalPlayer()
+        if want and IsValid(me) then
+            R.snd = CreateSound(me, want)
+            R.snd:PlayEx(c.volume, 100)
+        end
+    end
+
+    if R.snd then R.snd:ChangeVolume(c.volume, 0) end
+end
+
+AddHook("Think", "rain_sound", function()
+    MV.rain.Sound(cfg.rain)
+end)
+
+AddHook("PostDrawTranslucentRenderables", "rain", function(depth, skybox)
+    local c = cfg.rain
+    if depth or skybox or not c.enabled or IsHidden() then return end
+
+    local R = MV.rain
+    local eye = EyePos()
+
+    -- stepped once a frame (the hook can run more than once per frame)
+    local fn = FrameNumber()
+    if R.frame ~= fn then
+        R.Step(c, eye, math.min(FrameTime(), 0.1))
+        R.frame = fn
+    end
+
+    R.Draw(c, eye)
+end)
+
+AddHook("RenderScreenspaceEffects", "rain_darken", function()
+    local c = cfg.rain
+    if not c.enabled or c.darken <= 0 or IsHidden() then return end
+
+    local cm = MV.rain.cm
+    cm["$pp_colour_brightness"] = -c.darken * 0.35
+    cm["$pp_colour_contrast"] = 1 - c.darken * 0.25
+    cm["$pp_colour_colour"] = 1 - c.darken
+    DrawColorModify(cm)
+end)
+
+-- practice --------------------------------------------------------------------------------------
+-- The save key writes down where you stand (and where you look); the teleport key puts you back
+-- there with the engine's own setpos / setang. Those are cheat commands: they only work with
+-- sv_cheats 1 or on a server of your own (singleplayer / listen host) - a client can't move
+-- itself anywhere else. Keys are ignored while typing or while the cursor is out (menu, chat).
+MV.prac = {mat = Material("effects/laser1")}
+
+AddHook("Think", "practice", function()
+    local p, P = cfg.practice, MV.prac
+    local me = LocalPlayer()
+    if not p.enabled or not IsValid(me) then return end
+
+    local saveDown = (p.saveKey or 0) > 0 and IsBindDown(p.saveKey)
+    local tpDown = (p.tpKey or 0) > 0 and IsBindDown(p.tpKey)
+    local blocked = vgui.CursorVisible() or me:IsTyping()
+
+    if saveDown and not P.saveWas and not blocked then
+        P.pos, P.ang = me:GetPos(), me:EyeAngles()
+        notification.AddLegacy("Practice: position saved", NOTIFY_GENERIC, 2)
+        surface.PlaySound("buttons/button14.wav")
+    end
+
+    if tpDown and not P.tpWas and not blocked then
+        if not P.pos then
+            notification.AddLegacy("Practice: no position saved yet", NOTIFY_ERROR, 2)
+        else
+            me:ConCommand(string.format("setpos %.3f %.3f %.3f\n", P.pos.x, P.pos.y, P.pos.z))
+            if p.angles then
+                me:ConCommand(string.format("setang %.3f %.3f 0\n", P.ang.p, P.ang.y))
+            end
+
+            local cheats = GetConVar("sv_cheats")
+            if not game.SinglePlayer() and not (cheats and cheats:GetBool()) then
+                notification.AddLegacy("Practice: setpos needs sv_cheats 1 on this server", NOTIFY_ERROR, 3)
+            end
+            surface.PlaySound("buttons/blip1.wav")
+        end
+    end
+
+    P.saveWas, P.tpWas = saveDown, tpDown
+end)
+
+AddHook("PostDrawTranslucentRenderables", "practice", function(depth, skybox)
+    local p, P = cfg.practice, MV.prac
+    if skybox or not p.enabled or not p.marker or not P.pos or IsHidden() then return end
+
+    local pos = P.pos
+    local col = Color(149, 184, 6, 220)
+    local prev
+
+    render.SetMaterial(P.mat)
+    for n = 0, 24 do
+        local a = n / 24 * math.pi * 2
+        local pt = pos + Vector(math.cos(a) * 18, math.sin(a) * 18, 2)
+        if prev then render.DrawBeam(prev, pt, 3, 0, 1, col) end
+        prev = pt
+    end
+    render.DrawBeam(pos + Vector(0, 0, 2), pos + Vector(0, 0, 72), 2, 0, 1, Color(149, 184, 6, 120))
+end)
+
 -- killsay
 -- killsay lives in its own block (Lua allows 200 locals per chunk); the menu only needs KS.Status
 local KS = {}
@@ -8584,78 +10855,8 @@ AddHook("HUDPaint", "esp", function()
                 outline = Color(0, 0, 0, 255 * fade)
             end
 
-            if esp.box then
-                surface.SetDrawColor(COL_BOXBG)
-                surface.DrawOutlinedRect(x - 1, y - 1, w + 2, h + 2, 1)
-                surface.DrawOutlinedRect(x + 1, y + 1, w - 2, h - 2, 1)
-                surface.SetDrawColor(col)
-                surface.DrawOutlinedRect(x, y, w, h, 1)
-            end
-
-            local hpLine     -- text + colour of the HP number when it goes under the box
-
-            if esp.health and not dormant then
-                local hp = v:Health()
-                local maxHp = math.max(v:GetMaxHealth(), 100)
-                local frac = math.Clamp(hp / maxHp, 0, 1)
-                local barH = math.floor(h * frac)
-                local barCol = Color(255 * (1 - frac), 255 * frac, 0, 255)
-
-                surface.SetDrawColor(COL_BOXBG)
-                surface.DrawRect(x - 6, y - 1, 4, h + 2)
-                surface.SetDrawColor(barCol)
-                surface.DrawRect(x - 5, y + h - barH, 2, barH)
-
-                -- the number
-                if esp.hpText and not (esp.hpHideFull and hp >= maxHp) then
-                    local text = esp.hpPercent and (math.floor(frac * 100 + 0.5) .. "%") or tostring(math.max(hp, 0))
-                    local tcol = barCol
-                    if esp.hpColor == "text" then
-                        tcol = col
-                    elseif esp.hpColor == "custom" then
-                        tcol = Color(esp.hpR, esp.hpG, esp.hpB, col.a)
-                    end
-                    tcol = Color(tcol.r, tcol.g, tcol.b, col.a)   -- dormant fade
-
-                    if esp.hpPos == "top" then
-                        draw.SimpleTextOutlined(text, "NyxESP", x - 4, y - 3, tcol, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, outline)
-                    elseif esp.hpPos == "below" then
-                        hpLine = {text, tcol}
-                    else
-                        -- beside the bar, riding on its top edge (kept inside the box's height)
-                        local ty = math.Clamp(y + h - barH, y, y + h - 8)
-                        draw.SimpleTextOutlined(text, "NyxESP", x - 8, ty, tcol, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER, 1, outline)
-                    end
-                end
-            end
-
-            if esp.name then
-                draw.SimpleTextOutlined(v:Nick(), "NyxESP", x + w / 2, y - 3, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, outline)
-            end
-
-            local lineY = y + h + 2
-
-            if hpLine then
-                draw.SimpleTextOutlined(hpLine[1] .. (esp.hpPercent and "" or " hp"), "NyxESP", x + w / 2, lineY, hpLine[2],
-                    TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, outline)
-                lineY = lineY + 12
-            end
-            if esp.weapon and not dormant then
-                local wname = WeaponName(v)
-                if wname then
-                    draw.SimpleTextOutlined(wname, "NyxESP", x + w / 2, lineY, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, COL_BLACK)
-                    lineY = lineY + 12
-                end
-            end
-
-            if esp.distance then
-                draw.SimpleTextOutlined(math.floor(metres) .. "m", "NyxESP", x + w / 2, lineY, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, outline)
-                lineY = lineY + 12
-            end
-
-            if dormant then
-                draw.SimpleTextOutlined("dormant", "NyxESP", x + w / 2, lineY, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, outline)
-            end
+            -- the box and every element, the way the ESP editor has them (dormant shows in the flags)
+            ESPL.Draw(x, y, w, h, ESPL.Data(v, metres, dormant), col, outline)
         end
     end
 
@@ -8946,6 +11147,13 @@ local function NewGroup(col, title)
     g:SetSize(col.w, 60)
     g.col = col
     g.cy = 22
+
+    -- the key the dragged layout is saved under: the title, numbered when a tab repeats it
+    local seen = col.page.grpSeen or {}
+    col.page.grpSeen = seen
+    seen[title] = (seen[title] or 0) + 1
+    g.grpKey = seen[title] > 1 and title .. "#" .. seen[title] or title
+    if col.kind == "left" or col.kind == "right" then ANIM.GrpDrag(g) end
 
     g.Paint = function(self, w, h)
         surface.SetDrawColor(C.groupBorder)
@@ -9245,13 +11453,8 @@ local function AddButton(g, text, fn)
 end
 
 -- text may be a function for live values
-local function AddLabel(g, text, col)
-    local p = WidgetPanel(g, 14)
-    p.Paint = function(self, w, h)
-        local s = type(text) == "function" and text() or text
-        draw.SimpleText(s, "NyxUI", 0, h / 2, col or C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-    end
-end
+-- hint / status lines are not shown
+local function AddLabel() end
 
 -- colour picker -------------------------------------------------------------
 
@@ -9469,6 +11672,181 @@ local function ClosePopup()
     colorPopup = nil
 end
 
+-- draggable groups ----------------------------------------------------------------------------
+-- A group is picked up by its title strip and follows the mouse; the column under the mouse
+-- (left / right half of the page) and the place in it between the other groups is where it
+-- lands, and the others move apart live to show the gap. Each column is then stacked again
+-- from the top. The order goes into cfg.menu.layout per tab (so configs carry it too) and is
+-- put back every time the menu is built; groups the saved order doesn't know stay where they
+-- were built, at the end of their column. Tabs with full-width parts (players, entities) are
+-- left alone. (On ANIM: the main chunk is at Lua's 200 locals.)
+ANIM.GRP_KINDS = {"left", "right"}
+
+-- the page's left / right groups in stacking order (without skip), and their column tables
+function ANIM.GrpLists(page, skip)
+    local L = {left = {}, right = {}, cols = {}}
+    page.grpCols = page.grpCols or {}
+
+    for _, g in ipairs(page:GetChildren()) do
+        local c = g.col
+        if g.baseY and c then
+            if c.kind == "left" or c.kind == "right" then
+                page.grpCols[c.kind] = c
+                if g ~= skip then table.insert(L[c.kind], g) end
+            else
+                L.fill = true
+            end
+        end
+    end
+
+    for _, k in ipairs(ANIM.GRP_KINDS) do
+        L.cols[k] = page.grpCols[k]
+        table.sort(L[k], function(a, b) return a.baseY < b.baseY end)
+    end
+
+    -- a column with nothing built in it yet: next to the other one
+    local o = L.cols.left or L.cols.right
+    if o then
+        if not L.cols.left then L.cols.left = {page = page, x = 0, y = 0, w = o.w, kind = "left"} end
+        if not L.cols.right then L.cols.right = {page = page, x = o.x + o.w + 16, y = 0, w = o.w, kind = "right"} end
+        page.grpCols.left, page.grpCols.right = L.cols.left, L.cols.right
+    end
+
+    return L
+end
+
+-- stacks both columns from the top; gapKind / gapIdx / gapH leave room for a group being dragged
+function ANIM.GrpReflow(page, L, gapKind, gapIdx, gapH)
+    local s = page.applied or 0
+
+    for _, kind in ipairs(ANIM.GRP_KINDS) do
+        local col = L.cols[kind]
+        local y = 0
+
+        for i, g in ipairs(L[kind]) do
+            if kind == gapKind and i == gapIdx then y = y + gapH end
+
+            g.col, g.baseY = col, y
+            g:SetPos(col.x, y - s)
+            g:SetWide(col.w)
+            for _, w in ipairs(g:GetChildren()) do w:SetWide(col.w - 28) end
+
+            y = y + g:GetTall() + 14
+        end
+    end
+end
+
+function ANIM.GrpSave(page, L)
+    local all = util.JSONToTable(cfg.menu.layout or "") or {}
+    local e = {left = {}, right = {}}
+
+    for _, k in ipairs(ANIM.GRP_KINDS) do
+        for _, g in ipairs(L[k]) do e[k][#e[k] + 1] = g.grpKey end
+    end
+
+    all["tab" .. page.idx] = e
+    cfg.menu.layout = util.TableToJSON(all)
+end
+
+function ANIM.GrpApply(page)
+    local e = (util.JSONToTable(cfg.menu.layout or "") or {})["tab" .. page.idx]
+    if not e then return end
+
+    local L = ANIM.GrpLists(page)
+    if L.fill or not L.cols.left then return end
+
+    local byKey, used = {}, {}
+    for _, k in ipairs(ANIM.GRP_KINDS) do
+        for _, g in ipairs(L[k]) do byKey[g.grpKey] = g end
+    end
+
+    local N = {left = {}, right = {}, cols = L.cols}
+    for _, k in ipairs(ANIM.GRP_KINDS) do
+        for _, key in ipairs(e[k] or {}) do
+            local g = byKey[key]
+            if g and not used[g] then
+                used[g] = true
+                table.insert(N[k], g)
+            end
+        end
+    end
+
+    for _, k in ipairs(ANIM.GRP_KINDS) do
+        for _, g in ipairs(L[k]) do
+            if not used[g] then table.insert(N[k], g) end
+        end
+    end
+
+    ANIM.GrpReflow(page, N)
+end
+
+function ANIM.GrpDrag(g)
+    local HEAD = 18                      -- the title strip a drag starts from
+
+    g.OnMousePressed = function(self, code)
+        if code ~= MOUSE_LEFT then return end
+
+        local x, y = self:CursorPos()
+        if y > HEAD then return end
+        if ANIM.GrpLists(self:GetParent()).fill then return end
+
+        ClosePopup()
+        self.dragOff = {x, y}
+        self.dragging = true
+        self.dropKind, self.dropIdx = nil, nil
+        self:MouseCapture(true)
+        self:MoveToFront()
+        self:SetAlpha(210)
+    end
+
+    g.OnMouseReleased = function(self)
+        if not self.dragging then return end
+
+        self.dragging = false
+        self:MouseCapture(false)
+        self:SetAlpha(255)
+
+        local page = self:GetParent()
+        local L = ANIM.GrpLists(page, self)
+        local kind = self.dropKind or self.col.kind
+        table.insert(L[kind], math.Clamp(self.dropIdx or #L[kind] + 1, 1, #L[kind] + 1), self)
+
+        ANIM.GrpReflow(page, L)
+        ANIM.GrpSave(page, L)
+    end
+
+    g.Think = function(self)
+        if not self.dragging then
+            local _, y = self:CursorPos()
+            self:SetCursor((self:IsHovered() and y <= HEAD) and "sizeall" or "arrow")
+            return
+        end
+
+        local page = self:GetParent()
+        local px, py = page:CursorPos()
+        self:SetPos(px - self.dragOff[1], py - self.dragOff[2])
+
+        -- the column under the mouse, and the place in it by the others' middles
+        local L = ANIM.GrpLists(page, self)
+        local kind = px < page:GetWide() / 2 and "left" or "right"
+        local cy = py + (page.applied or 0)
+        local idx, y0 = #L[kind] + 1, 0
+
+        for i, o in ipairs(L[kind]) do
+            if cy < y0 + o:GetTall() / 2 then
+                idx = i
+                break
+            end
+            y0 = y0 + o:GetTall() + 14
+        end
+
+        if kind ~= self.dropKind or idx ~= self.dropIdx then
+            self.dropKind, self.dropIdx = kind, idx
+            ANIM.GrpReflow(page, L, kind, idx, self:GetTall() + 14)
+        end
+    end
+end
+
 -- build(p) fills the popup with the same widgets the tab groups use
 local function OpenPopup(title, width, build)
     ClosePopup()
@@ -9619,6 +11997,485 @@ OpenColorPopup = function(title, build)
 
     WrapPaint(p)
 end
+
+-- ESP editor ----------------------------------------------------------------------------------
+-- A window beside the menu: your model with the ESP drawn round it (made-up data, the real
+-- layout and colours). Drag any element onto a side of the box - its place in that side's stack
+-- is where you let go (nearer the box = first) - or down into the pool to switch it off, and
+-- from the pool back onto the box. A click (left or right) selects an element; its colour and
+-- "auto" are on the right. Everything goes into cfg.espl / cfg.espc, so configs keep it.
+ESPL.defaults = {espl = table.Copy(cfg.espl), espc = table.Copy(cfg.espc)}
+
+-- the side and place a drop at local point (lx, ly) of the preview means
+function ESPL.DropAt(id, lx, ly, b, hits)
+    -- the box has no side: dropped anywhere on the preview, it is on
+    if id == "box" then
+        cfg.esp.box = true
+        return
+    end
+
+    local dx, dy = lx - (b.x + b.w / 2), ly - (b.y + b.h / 2)
+    local side
+    if math.abs(dx) / (b.w / 2) > math.abs(dy) / (b.h / 2) then
+        side = dx < 0 and "left" or "right"
+    else
+        side = dy < 0 and "top" or "bottom"
+    end
+
+    -- the others on that side, in order, and how far each sits from the box
+    local list = {}
+    for _, e in ipairs(ESPL.Sides()[side]) do
+        if e.id ~= id then list[#list + 1] = e.id end
+    end
+
+    local function Dist(px, py)
+        if side == "top" then return b.y - py end
+        if side == "bottom" then return py - (b.y + b.h) end
+        return py - b.y                         -- left / right: the column runs downward
+    end
+
+    local mine, pos = Dist(lx, ly), #list + 1
+    for i, other in ipairs(list) do
+        local r = hits[other]
+        if r and mine < Dist(r.x + r.w / 2, r.y + r.h / 2) then
+            pos = i
+            break
+        end
+    end
+    table.insert(list, pos, id)
+
+    for i, other in ipairs(list) do
+        cfg.espl[other] = cfg.espl[other] or {}
+        cfg.espl[other].side, cfg.espl[other].order = side, i
+    end
+
+    local leg = ESPL.LEGACY[id]
+    if leg then cfg.esp[leg] = true end
+end
+
+function ESPL.SetOff(id)
+    cfg.espl[id] = cfg.espl[id] or {order = 99}
+    cfg.espl[id].side = "off"
+    local leg = ESPL.LEGACY[id]
+    if leg then cfg.esp[leg] = false end
+end
+
+-- right-click menu of one element: its colour, "auto", its own settings, off / back on.
+-- A panel of the editor window at the cursor; a click outside closes it.
+function ESPL.OpenElementMenu(f, id)
+    if IsValid(ESPL.pop) then ESPL.pop:Remove() end
+    local e = ESPL.BYID[id]
+    if not e or not IsValid(f) then return end
+
+    cfg.espc[id] = cfg.espc[id] or {r = 255, g = 255, b = 255, auto = true}
+    local c = cfg.espc[id]
+
+    local p = vgui.Create("Panel", f)
+    ESPL.pop = p
+    p:SetSize(230, 60)
+    p.cy = 28
+
+    p.Paint = function(self, w, h)
+        surface.SetDrawColor(C.tabBg)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(C.border)
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+        surface.SetDrawColor(C.accent)
+        surface.DrawRect(1, 1, w - 2, 1)
+        draw.SimpleText(e.label, "NyxUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(ESPL.Side(id), "NyxUISmall", w - 10, 9, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+    end
+
+    AddCheck(p, (id == "hp" or id == "hpbar") and "Auto (green .. red by health)" or "Auto (the ESP colour)", c, "auto")
+    AddColorPicker(p, c, "r", "g", "b")
+
+    -- the element's own settings
+    if id == "hp" then
+        AddCheck(p, "As percent", cfg.esp, "hpPercent")
+        AddCheck(p, "Hide at full HP", cfg.esp, "hpHideFull")
+    end
+
+    if ESPL.Side(id) == "off" then
+        AddButton(p, "Put it back (under the box)", function()
+            ESPL.DropAt(id, 0, 1e6, {x = 0, y = 0, w = 1, h = 1}, {})
+            p:Remove()
+        end)
+    else
+        AddButton(p, "Switch it off", function()
+            ESPL.SetOff(id)
+            p:Remove()
+        end)
+    end
+    p:SetTall(p.cy + 6)
+
+    local lx, ly = f:ScreenToLocal(gui.MouseX(), gui.MouseY())
+    p:SetPos(math.Clamp(lx + 4, 4, f:GetWide() - p:GetWide() - 4), math.Clamp(ly, 30, f:GetTall() - p:GetTall() - 4))
+    p:MoveToFront()
+
+    -- a picked colour means "this colour", not auto; a click outside closes the menu
+    local r0, g0, b0 = c.r, c.g, c.b
+    p.wasDown = true
+    p.Think = function(self)
+        if c.r ~= r0 or c.g ~= g0 or c.b ~= b0 then
+            r0, g0, b0 = c.r, c.g, c.b
+            c.auto = false
+        end
+
+        local down = input.IsMouseDown(MOUSE_LEFT) or input.IsMouseDown(MOUSE_RIGHT)
+        if down and not self.wasDown and not binding and not CU.Inside(self, gui.MouseX(), gui.MouseY()) then
+            self:Remove()
+            return
+        end
+        self.wasDown = down
+    end
+end
+
+-- The box of the model in the preview. Vector:ToScreen inside the panel's 3D view reports the
+-- point scaled to the whole screen rather than to the panel, so the corners are taken as a
+-- fraction of the screen and scaled to the panel; in case the engine does give real screen
+-- positions, the look-at point is projected too and whichever reading puts it at the panel's
+-- centre is used. Nothing sensible: a fixed box in the middle.
+function ESPL.ProjectBox(pv, ent)
+    local w, h = pv:GetSize()
+    local sw, sh = ScrW(), ScrH()
+    local px, py = pv:LocalToScreen(0, 0)
+
+    local c = pv:GetLookAt():ToScreen()
+    local scaledOk = math.abs(c.x / sw * w - w / 2) < w * 0.2 and math.abs(c.y / sh * h - h / 2) < h * 0.2
+    local screenOk = math.abs(c.x - px - w / 2) < w * 0.2 and math.abs(c.y - py - h / 2) < h * 0.2
+
+    -- the hull's middle slice (local x = 0, the model faces the camera): the near corners of
+    -- the full box would project lower and wider than the model and leave the box hanging below
+    -- its feet
+    local mins, maxs = ent:OBBMins(), ent:OBBMaxs()
+    local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+
+    for i = 0, 3 do
+        local v = ent:LocalToWorld(Vector(0,
+            bit.band(i, 1) > 0 and maxs.y or mins.y,
+            bit.band(i, 2) > 0 and maxs.z or mins.z))
+        local s = v:ToScreen()
+        local lx, ly
+        if scaledOk or not screenOk then
+            lx, ly = s.x / sw * w, s.y / sh * h
+        else
+            lx, ly = s.x - px, s.y - py
+        end
+        x0, y0, x1, y1 = math.min(x0, lx), math.min(y0, ly), math.max(x1, lx), math.max(y1, ly)
+    end
+
+    local bw, bh = x1 - x0, y1 - y0
+    if not (scaledOk or screenOk) or bw < 10 or bh < 20 or bh > h or bw > w then
+        bh = h * 0.72
+        bw = bh * 0.42
+        return {x = (w - bw) / 2, y = (h - bh) / 2, w = bw, h = bh}
+    end
+
+    return {x = x0, y = y0, w = bw, h = bh}
+end
+
+-- The editor window: attached to the menu - 8 px to its right (its left when there's no room),
+-- level with its top and as tall as it - and it follows it when it moves, resizes or fades.
+ESPL.GAP = 8
+
+function ESPL.Attach(f)
+    local W = f:GetWide()
+    local mx, my = menu:GetPos()
+    local fx = mx + menu:GetWide() + ESPL.GAP
+    if fx + W > ScrW() then fx = mx - W - ESPL.GAP end
+    f:SetPos(fx, my)
+
+    local H = menu:GetTall()
+    if f:GetTall() ~= H then
+        f:SetTall(H)
+        if IsValid(f.pv) and IsValid(f.pool) then
+            local poolH = 112
+            f.pv:SetSize(W - 20, H - 30 - 10 - poolH - 8)
+            f.pool:SetPos(10, H - 10 - poolH)
+            f.pool:SetSize(W - 20, poolH)
+        end
+    end
+end
+
+function ESPL.OpenEditor()
+    if IsValid(ESPL.win) then ESPL.win:Remove() end
+    if not IsValid(menu) then return end
+
+    local W, H = 320, 520
+    local f = vgui.Create("EditablePanel")
+    ESPL.win = f
+    f:SetSize(W, H)
+    f:MakePopup()
+    f:SetKeyboardInputEnabled(false)            -- WASD keeps working
+    ESPL.drag = nil
+
+    f.Paint = function(self, w, h)
+        surface.SetDrawColor(C.bg)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(C.border)
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+        for gx = 1, w - 3, 2 do
+            local r, g, b = GradientAt((gx - 1) / (w - 3))
+            surface.SetDrawColor(r, g, b, 255)
+            surface.DrawRect(gx, 1, 2, 2)
+        end
+        draw.SimpleText("ESP editor", "NyxUIBold", 10, 9, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText("drag / right click", "NyxUISmall", 82, 10, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+    end
+
+    -- reset (top right)
+    local reset = vgui.Create("Panel", f)
+    reset:SetPos(W - 48, 5)
+    reset:SetSize(42, 18)
+    reset:SetCursor("hand")
+    reset.Paint = function(self, w, h)
+        draw.SimpleText("reset", "NyxUISmall", w / 2, h / 2, self:IsHovered() and C.textHi or C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+    reset.OnMousePressed = function()
+        cfg.espl = table.Copy(ESPL.defaults.espl)
+        cfg.espc = table.Copy(ESPL.defaults.espc)
+        for _, leg in pairs(ESPL.LEGACY) do cfg.esp[leg] = true end
+    end
+
+    -- the preview: your model, bigger, with the ESP round its box
+    local pv = vgui.Create("DModelPanel", f)
+    pv:SetPos(10, 30)
+    pv:SetSize(W - 20, 370)
+    local me = LocalPlayer()
+    pv:SetModel(IsValid(me) and me:GetModel() or "models/player/kleiner.mdl")
+    pv:SetFOV(30)
+    pv:SetCamPos(Vector(150, 0, 38))
+    pv:SetLookAt(Vector(0, 0, 37))
+    pv:SetAnimated(false)
+    pv.LayoutEntity = function(self, ent) ent:SetAngles(Angle(0, 15, 0)) end
+    pv.hits = {}
+
+    pv.PostDrawModel = function(self, ent)
+        self.box = ESPL.ProjectBox(self, ent)
+    end
+
+    -- The player chams on the model, as the players get them: the material, the visible colour
+    -- and the alpha; with "through walls" a copy in the hidden colour stands a little behind it,
+    -- so both colours show. The panel's own lighting is kept (lit looks like rim / self-illum
+    -- get its light), the flat ones get full white light. The normal draw is skipped then, so
+    -- the box is worked out here.
+    pv.PreDrawModel = function(self, ent)
+        local c = cfg.chams
+        if not (c.enabled and c.players) or IsHidden() then return end
+
+        local mat = CHAMS_MATS[c.material] or CHAMS_MATS.flat
+        if not mat then return end
+        local alpha = math.min(c.alpha, 254) / 255
+
+        local orig = mat == MV.chamOrig
+
+        local function Pass(r, g, b)
+            MV.ChamTint(mat, r, g, b)
+            if not CHAMS_LIT[mat] then render.ResetModelLighting(1, 1, 1) end
+            render.MaterialOverride(not orig and mat or nil)
+            if orig then r, g, b = 255, 255, 255 end
+            render.SetColorModulation(r / 255, g / 255, b / 255)
+            render.SetBlend(alpha)
+            ent:DrawModel()
+        end
+
+        if c.throughWalls then
+            ent:SetPos(Vector(-34, -22, 0))
+            ent:SetupBones()
+            Pass(c.hidR, c.hidG, c.hidB)
+            ent:SetPos(Vector(0, 0, 0))
+            ent:SetupBones()
+        end
+
+        Pass(c.visR, c.visG, c.visB)
+
+        render.SetBlend(1)
+        render.SetColorModulation(1, 1, 1)
+        render.MaterialOverride(nil)
+
+        self:PostDrawModel(ent)
+        return false
+    end
+
+    local paintModel = pv.Paint
+    pv.Paint = function(self, w, h)
+        surface.SetDrawColor(C.field)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(C.groupBorder)
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+        paintModel(self, w, h)
+    end
+
+    pv.PaintOver = function(self, w, h)
+        local b = self.box
+        if not b then return end
+
+        local esp = cfg.esp
+        local base = Color(esp.r, esp.g, esp.b, 255)
+
+        local hits = {}
+        ESPL.Draw(b.x, b.y, b.w, b.h, ESPL.FAKE, base, COL_BLACK, hits)
+        self.hits = hits
+
+        local cx, cy = self:CursorPos()
+        for id, r in pairs(hits) do
+            local hov = cx >= r.x - 2 and cx <= r.x + r.w + 2 and cy >= r.y - 2 and cy <= r.y + r.h + 2
+            if id == ESPL.sel or hov then
+                surface.SetDrawColor(C.accent.r, C.accent.g, C.accent.b, id == ESPL.sel and 220 or 90)
+                surface.DrawOutlinedRect(r.x - 2, r.y - 2, r.w + 4, r.h + 4, 1)
+            end
+        end
+
+        -- while dragging: the side it would land on
+        if ESPL.drag and self:IsHovered() then
+            local dx, dy = cx - (b.x + b.w / 2), cy - (b.y + b.h / 2)
+            surface.SetDrawColor(C.accent.r, C.accent.g, C.accent.b, 120)
+            if math.abs(dx) / (b.w / 2) > math.abs(dy) / (b.h / 2) then
+                surface.DrawRect(dx < 0 and b.x - 3 or b.x + b.w + 1, b.y, 2, b.h)
+            else
+                surface.DrawRect(b.x, dy < 0 and b.y - 3 or b.y + b.h + 1, b.w, 2)
+            end
+        end
+    end
+
+    -- the elements round the box first, the box (its whole inside) last
+    local function HitAt(self)
+        local cx, cy = self:CursorPos()
+        local boxHit
+        for id, r in pairs(self.hits or {}) do
+            if cx >= r.x - 2 and cx <= r.x + r.w + 2 and cy >= r.y - 2 and cy <= r.y + r.h + 2 then
+                if id ~= "box" then return id end
+                boxHit = id
+            end
+        end
+        return boxHit
+    end
+
+    -- left: pick up, right: its menu
+    pv.OnMousePressed = function(self, code)
+        local id = HitAt(self)
+        if not id then return end
+        ESPL.sel = id
+        if code == MOUSE_LEFT then
+            ESPL.drag = {id = id}
+        elseif code == MOUSE_RIGHT then
+            ESPL.OpenElementMenu(f, id)
+        end
+    end
+
+    -- the pool: switched off elements, as chips
+    local pool = vgui.Create("Panel", f)
+    pool:SetPos(10, 408)
+    pool:SetSize(W - 20, H - 418)
+    pool.chips = {}
+
+    -- laid out to the menu's height and put beside it right away
+    f.pv, f.pool = pv, pool
+    f:SetTall(0)
+    ESPL.Attach(f)
+
+    pool.Paint = function(self, w, h)
+        surface.SetDrawColor(C.field)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(ESPL.drag and C.accent or C.groupBorder)
+        surface.DrawOutlinedRect(0, 0, w, h, 1)
+        draw.SimpleText("Drag & Drop Elements", "NyxUIBold", 8, 6, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+
+        surface.SetFont("NyxUI")
+        local x, y = 8, 26
+        local chips = {}
+        local cx, cy = self:CursorPos()
+
+        for _, e in ipairs(ESPL.Sides().off) do
+            local tw = surface.GetTextSize(e.label) + 12
+            if x + tw > w - 8 then x, y = 8, y + 22 end
+
+            local hov = cx >= x and cx <= x + tw and cy >= y and cy <= y + 18
+            surface.SetDrawColor(hov and C.fieldHover or C.bg)
+            surface.DrawRect(x, y, tw, 18)
+            surface.SetDrawColor(e.id == ESPL.sel and C.accent or C.groupBorder)
+            surface.DrawOutlinedRect(x, y, tw, 18, 1)
+            draw.SimpleText(e.label, "NyxUI", x + tw / 2, y + 9, hov and C.textHi or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+
+            chips[#chips + 1] = {id = e.id, x = x, y = y, w = tw, h = 18}
+            x = x + tw + 6
+        end
+
+        if #chips == 0 then
+            draw.SimpleText("drop an element here to switch it off", "NyxUISmall", w / 2, h / 2 + 8, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        end
+        self.chips = chips
+    end
+
+    pool.OnMousePressed = function(self, code)
+        local cx, cy = self:CursorPos()
+        for _, c in ipairs(self.chips) do
+            if cx >= c.x and cx <= c.x + c.w and cy >= c.y and cy <= c.y + c.h then
+                ESPL.sel = c.id
+                if code == MOUSE_LEFT then
+                    ESPL.drag = {id = c.id}
+                elseif code == MOUSE_RIGHT then
+                    ESPL.OpenElementMenu(f, c.id)
+                end
+                return
+            end
+        end
+    end
+
+    -- the dragged element follows the cursor
+    f.PaintOver = function(self, w, h)
+        local d = ESPL.drag
+        if not d then return end
+        local lx, ly = self:ScreenToLocal(gui.MouseX(), gui.MouseY())
+        local label = ESPL.BYID[d.id].label
+        surface.SetFont("NyxUI")
+        local tw = surface.GetTextSize(label) + 12
+        surface.SetDrawColor(C.fieldHover)
+        surface.DrawRect(lx + 10, ly + 6, tw, 18)
+        surface.SetDrawColor(C.accent)
+        surface.DrawOutlinedRect(lx + 10, ly + 6, tw, 18, 1)
+        draw.SimpleText(label, "NyxUI", lx + 10 + tw / 2, ly + 15, C.textHi, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+
+    f.Think = function(self)
+        -- lives and fades with the menu
+        if not IsValid(menu) then
+            self:Remove()
+            return
+        end
+        self:SetAlpha(IsHidden() and 0 or menu:GetAlpha())
+        ESPL.Attach(self)
+
+        -- a drag ends when the button comes up: onto the box, into the pool, or nowhere
+        local d = ESPL.drag
+        if d and not input.IsMouseDown(MOUSE_LEFT) then
+            ESPL.drag = nil
+            local sx, sy = gui.MouseX(), gui.MouseY()
+
+            if CU.Inside(pool, sx, sy) then
+                ESPL.SetOff(d.id)
+            elseif CU.Inside(pv, sx, sy) and pv.box then
+                local lx, ly = pv:ScreenToLocal(sx, sy)
+                ESPL.DropAt(d.id, lx, ly, pv.box, pv.hits or {})
+            end
+        end
+    end
+end
+
+-- there while the menu shows the Visuals tab (the ESP lives there: TABS[4]), gone on any other
+ESPL.TAB = 4
+
+AddHook("Think", "espeditor", function()
+    local want = IsValid(menu) and not menu.closing and lastTab == ESPL.TAB
+
+    if want and not IsValid(ESPL.win) then
+        ESPL.OpenEditor()
+    elseif not want and IsValid(ESPL.win) then
+        ESPL.drag = nil
+        ESPL.win:Remove()
+    end
+end)
+
 
 -- keybind capture by polling: wait until everything is released, then take the first press.
 -- Only real keys are scanned: KEY_CAPSLOCKTOGGLE / NUMLOCKTOGGLE / SCROLLLOCKTOGGLE (104-106)
@@ -13445,6 +16302,7 @@ local function BuildMenu()
         page:SetPos(PAGE_X, PAGE_Y)
         page:SetSize(PAGE_W, PAGE_H)
         page:SetVisible(i == lastTab)
+        page.idx = i
         pages[i] = page
 
         -- Scrolling: the mouse wheel anywhere over the page moves its groups up / down (widgets
@@ -13501,7 +16359,7 @@ local function BuildMenu()
             self.applied = s
 
             for _, g in ipairs(self:GetChildren()) do
-                if g.baseY then g:SetPos(g:GetX(), g.baseY - s) end
+                if g.baseY and not g.dragging then g:SetPos(g:GetX(), g.baseY - s) end
             end
         end
 
@@ -13604,7 +16462,14 @@ local function BuildMenu()
         local bt = cfg.backtrack
         g = NewGroup(left, "Backtrack")
         AddCheck(g, "Backtrack (both aimbots)", bt, "enabled", function(p)
-            AddSlider(p, "Max age", bt, "ms", 20, 200, 0, "ms")
+            AddList(p, "Backtrack mode", bt, "mode", {
+                {"Newest first (nyx)", "newest"}, {"Last ticks", "last"}, {"Closest", "closest"}, {"Scan", "scan"},
+            })
+            AddSlider(p, "Backtrack time", bt, "ms", 20, 1000, 0, "ms")
+            AddCheck(p, "Extended: past 200 ms (module v6)", bt, "extended")
+            AddLabel(p, BT.ExtStatus, C.accent)
+            AddCheck(p, "Ignore break LC", bt, "ignoreBreakLC")
+            AddCheck(p, "Always backtrack (rage)", bt, "always")
             AddCheck(p, "Draw records", bt, "draw")
             AddLabel(p, "Shoots where he was, if he is")
             AddLabel(p, "hidden now but was visible")
@@ -13615,6 +16480,16 @@ local function BuildMenu()
             AddLabel(p, "is written by the module.")
             AddLabel(p, BT.ModStatus, C.accent)
         end)
+        EndGroup(g)
+
+        local zx = cfg.zx
+        g = NewGroup(left, "zxcmodule")
+        AddCheck(g, "Use zxcmodule", zx, "enabled")
+        AddLabel(g, BT.ZXStatus, C.accent)
+        AddCheck(g, "Engine prediction (aimbots)", zx, "predict")
+        AddCheck(g, "Disable interpolation", zx, "noInterp")
+        AddCheck(g, "Disable sequence interpolation", zx, "noSeqInterp")
+        AddCheck(g, "Animation fix", zx, "animFix")
         EndGroup(g)
 
         g = NewGroup(left, "Filters")
@@ -13682,13 +16557,7 @@ local function BuildMenu()
 
         local ns = cfg.nospread
         g = NewGroup(right, "No spread")
-        AddCheck(g, "No spread", ns, "enabled", function(p)
-            AddLabel(p, NS.StatusLine)
-            AddLabel(p, "FireBullets weapons (HL2, M9K ...):")
-            AddLabel(p, "engine spread per seed x the cone")
-            AddLabel(p, "learned from your first shot.")
-            AddLabel(p, "CW 2.0 / SWB / VGUNS: their own roll.")
-        end)
+        AddCheck(g, "No spread", ns, "enabled")
         EndGroup(g)
 
         local nr = cfg.norecoil
@@ -13862,15 +16731,9 @@ local function BuildMenu()
         AddCheck(g, "Name", esp, "name")
         AddCheck(g, "Health bar", esp, "health", function(p)
             AddCheck(p, "HP number", esp, "hpText")
-            AddList(p, "Number position", esp, "hpPos", {
-                {"Beside the bar (follows it)", "follow"}, {"Above the bar", "top"}, {"Under the box", "below"},
-            })
             AddCheck(p, "As percent", esp, "hpPercent")
             AddCheck(p, "Hide at full HP", esp, "hpHideFull")
-            AddList(p, "Number color", esp, "hpColor", {
-                {"Like the bar (green - red)", "bar"}, {"ESP text color", "text"}, {"Custom", "custom"},
-            })
-            AddColor(p, "Custom color", esp, "hpR", "hpG", "hpB")
+            AddLabel(p, "Place + colour: the ESP editor")
         end)
         AddCheck(g, "Weapon", esp, "weapon")
         AddCheck(g, "Distance", esp, "distance")
@@ -13957,6 +16820,18 @@ local function BuildMenu()
 
         g = NewGroup(left, "Chams")
         AddCheck(g, "Chams", ch, "enabled", BuildChams)
+
+        local bc = cfg.btchams
+        AddCheck(g, "Backtrack chams", bc, "enabled", function(p)
+            AddList(p, "Show", bc, "mode", {{"Aimed record", "aim"}, {"Oldest record", "last"}, {"All records (trail)", "all"}})
+            AddSlider(p, "Trail: every Nth", bc, "step", 1, 8, 0)
+            AddCheck(p, "Only the aim target", bc, "targetOnly")
+            AddCheck(p, "Through walls", bc, "throughWalls")
+            AddList(p, "Material", bc, "material", CHAMS_CHOICES)
+            AddSlider(p, "Alpha", bc, "alpha", 20, 254, 0)
+            AddColor(p, "Color", bc, "r", "g", "b")
+            AddLabel(p, "Needs Backtrack on (Rage tab)")
+        end)
         EndGroup(g)
 
         local tr = cfg.tracers
@@ -14003,6 +16878,34 @@ local function BuildMenu()
         AddSlider(g, "Distance below crosshair", xi, "offset", 8, 120, 0, "px")
         EndGroup(g)
 
+        local rn = cfg.rain
+        g = NewGroup(left, "Rain")
+        AddCheck(g, "Rain", rn, "enabled", function(p)
+            AddSlider(p, "Drops", rn, "count", 100, 6000, 0)
+            AddSlider(p, "Area radius", rn, "radius", 150, 2500, 0, "u")
+            AddSlider(p, "Start height", rn, "height", 100, 2000, 0, "u")
+            AddSlider(p, "Fall speed", rn, "speed", 100, 3000, 0, " u/s")
+            AddSlider(p, "Speed variation", rn, "speedVar", 0, 0.8, 2)
+            AddSlider(p, "Wind direction", rn, "windYaw", 0, 360, 0, "\194\176")
+            AddSlider(p, "Wind speed", rn, "wind", 0, 1500, 0, " u/s")
+            AddSlider(p, "Gusts", rn, "gust", 0, 1, 2)
+            AddSlider(p, "Drop length", rn, "length", 2, 150, 0, "u")
+            AddSlider(p, "Drop width", rn, "width", 0.2, 6, 1, "u")
+            AddList(p, "Style", rn, "style", {{"Streak (glow)", "streak"}, {"Solid", "solid"}})
+            AddColor(p, "Color", rn, "r", "g", "b")
+            AddSlider(p, "Opacity", rn, "a", 10, 255, 0)
+            AddCheck(p, "Not under roofs", rn, "roof")
+            AddCheck(p, "Splashes", rn, "splash")
+            AddSlider(p, "Splash size", rn, "splashSize", 1, 30, 0)
+            AddList(p, "Sound", rn, "sound", {
+                {"Off", "off"}, {"Rain", "ambient/weather/rumble_rain.wav"},
+                {"Rain, no wind", "ambient/weather/rumble_rain_nowind.wav"},
+            })
+            AddSlider(p, "Volume", rn, "volume", 0, 1, 2)
+            AddSlider(p, "Darken world", rn, "darken", 0, 0.6, 2)
+        end)
+        EndGroup(g)
+
         local kf = cfg.killfx
         g = NewGroup(left, "Kill effects")
         AddCheck(g, "Kill effects", kf, "enabled", function(p)
@@ -14023,6 +16926,11 @@ local function BuildMenu()
             AddCheck(p, "Streak banner", kf, "banner")
             AddCheck(p, "Screen shake", kf, "shake")
             AddCheck(p, "Scorch mark", kf, "scorch")
+            AddCheck(p, "Disintegrate body", kf, "disint")
+            AddSlider(p, "Body particles", kf, "dsCount", 40, 800, 0)
+            AddCheck(p, "Hide the body", kf, "dsHide")
+            AddCheck(p, "Golden beam", kf, "dsBeam")
+            AddCheck(p, "Particles in effect color", kf, "dsTint")
             AddList(p, "Ragdoll", kf, "ragdoll", {
                 {"Off", "off"}, {"Gold", "gold"}, {"Ice", "ice"}, {"Color", "color"}, {"Dissolve", "dissolve"},
                 {"Neon wireframe", "neon"}, {"Chrome", "chrome"}, {"Energy", "energy"}, {"Void", "void"},
@@ -14234,6 +17142,13 @@ local function BuildMenu()
             AddLabel(p, "soonest edge bug is flown to.")
             AddLabel(p, "More lines = more CPU per tick.")
         end)
+        AddCheck(g, "Edge skip", m, "edgeskip", function(p)
+            AddSlider(p, "Hold look ahead", m, "esTicks", 2, 32, 0, " ticks")
+            AddSlider(p, "Hold at most", m, "esMax", 0.2, 3, 1, "s")
+        end)
+        AddCheck(g, "Fireman (ladder)", m, "fireman", function(p)
+            AddCheck(p, "Bhop on landing", m, "fmBhop")
+        end)
         AddCheck(g, "Texture bug", m, "texturebug", function(p)
             AddSlider(p, "Press 1", m, "tbFwd1", 0, 5, 2)
             AddSlider(p, "Press 2", m, "tbFwd2", 0, 5, 2)
@@ -14264,6 +17179,9 @@ local function BuildMenu()
         AddCheck(g, "Pixel surf", m, "pixelsurf", function(p)
             AddCheck(p, "Auto align (press onto the lip)", m, "psAlign")
             AddCheck(p, "Gain speed while surfing", m, "psGain")
+            AddCheck(p, "Search presses (catch from afar)", m, "psSearch")
+            AddSlider(p, "Search reach", m, "psReach", 1, 64, 0, "u")
+            AddSlider(p, "Presses per tick", m, "psBudget", 10, 400, 0)
             AddSlider(p, "Look ahead", m, "psTicks", 1, 16, 0, " ticks")
             AddLabel(p, MV.PSStatus, C.accent)
             AddLabel(p, "Fall along a wall holding the key:")
@@ -14276,15 +17194,19 @@ local function BuildMenu()
         AddCheck(g, "Pixel finder", m, "psFinder", function(p)
             AddKeybind(p, "Mark key", m, "psfKey")
             AddCheck(p, "Live (wall under crosshair)", m, "psfLive")
-            AddSlider(p, "Live range", m, "psfRange", 8, 256, 0, "u")
+            AddSlider(p, "Height range", m, "psfRange", 8, 512, 0, "u")
+            AddSlider(p, "Live width (each side)", m, "psfLiveWidth", 0, 1024, 0, "u")
+            AddSlider(p, "Column step", m, "psfStep", 2, 64, 0, "u")
+            AddSlider(p, "Columns per tick", m, "psfBudget", 1, 32, 0)
             AddSlider(p, "Hull inset", m, "psfInset", -0.05, 0.05, 5, "u")
             AddButton(p, "Clear", MV.PSClear)
             AddLabel(p, MV.PSFinderStatus, C.accent)
-            AddLabel(p, "Hold the key on a wall, look up or")
-            AddLabel(p, "down along it, let go: every unit of")
-            AddLabel(p, "the line is tested. Green line = a lip")
-            AddLabel(p, "to pixel surf on standing, cyan = only")
-            AddLabel(p, "ducked. No lips anywhere: inset 0.")
+            AddLabel(p, "Hold the key on a wall and draw a")
+            AddLabel(p, "line any way (along, up, diagonal,")
+            AddLabel(p, "round corners), let go: the wall is")
+            AddLabel(p, "scanned in columns along it. Lips")
+            AddLabel(p, "add up until Clear. Green = standing,")
+            AddLabel(p, "cyan = ducked. Nothing: inset 0.")
         end)
         AddCheck(g, "Pixel calculator", m, "psCalc", function(p)
             AddCheck(p, "Panel by the crosshair", m, "psCalcHud")
@@ -14298,17 +17220,37 @@ local function BuildMenu()
             AddLabel(p, "GMod's jump from your own jumps.")
             AddLabel(p, "Auto key on the ground: does the jump.")
         end)
+        AddCheck(g, "Pixel surf helper", m, "psHelper", function(p)
+            AddSlider(p, "Look ahead", m, "psHelperTicks", 8, 128, 0, " ticks")
+            AddSlider(p, "Lip range", m, "psHelperRange", 100, 1500, 0, "u")
+            AddLabel(p, MV.PSHelperStatus, C.accent)
+            AddLabel(p, "Find lips (finder / live), hold the")
+            AddLabel(p, "key and run at the wall without")
+            AddLabel(p, "jumping: every tick 'jump now' is")
+            AddLabel(p, "simulated (jump, jump + duck, crouch")
+            AddLabel(p, "jump); the one that lands on the lip")
+            AddLabel(p, "is done, then duck + wall press held.")
+            AddLabel(p, "Lip: the one you look at, else nearest.")
+            AddLabel(p, "Jump once by hand first (calibration).")
+        end)
         AddCheck(g, "Mini jump", m, "minijump", function(p)
             AddCheck(p, "Hold duck until landing", m, "mjHoldDuck")
             AddLabel(p, "Jump + duck on the tick you walk")
             AddLabel(p, "off an edge.")
         end)
-        AddCheck(g, "Long jump", m, "longjump", function(p)
-            AddLabel(p, "Duck on the jump and the first")
-            AddLabel(p, "two ticks in the air.")
-        end)
+        AddCheck(g, "Long jump", m, "longjump")
         AddLabel(g, MV.Status, C.accent)
         AddLabel(g, "Right-click the check: bind it (hold)")
+        EndGroup(g)
+
+        local pr = cfg.practice
+        g = NewGroup(right, "Practice")
+        AddCheck(g, "Practice", pr, "enabled", function(p)
+            AddCheck(p, "Restore view angle", pr, "angles")
+            AddCheck(p, "Marker at the spot", pr, "marker")
+        end)
+        AddKeybind(g, "Save position", pr, "saveKey")
+        AddKeybind(g, "Teleport back", pr, "tpKey")
         EndGroup(g)
 
         g = NewGroup(right, "Autostrafe")
@@ -14518,6 +17460,14 @@ local function BuildMenu()
             cfg.menu.w, cfg.menu.h = 660, 520
             if IsValid(menu) and menu.Resize then menu.Resize(660, 520) end
         end)
+        AddButton(g, "Reset group layout", function()
+            cfg.menu.layout = ""
+            local old = menu
+            timer.Simple(0, function()
+                if IsValid(old) then old:Remove() end
+                BuildMenu()
+            end)
+        end)
         AddButton(g, "Unload", function() NyxUnload() end)
         EndGroup(g)
     end
@@ -14536,16 +17486,6 @@ local function BuildMenu()
         AddButton(g, "Open configs folder", CFGS.OpenFolder)
         AddButton(g, "Reset all to defaults", CFGS.Reset)
         AddLabel(g, CFGS.Status, C.accent)
-        EndGroup(g)
-
-        g = NewGroup(right, "Console")
-        AddLabel(g, "nyx_config_save <name>")
-        AddLabel(g, "nyx_config_load <name>")
-        AddLabel(g, "nyx_config_list")
-        AddLabel(g, "Files: garrysmod/data/nyx/configs/")
-        AddLabel(g, "Saved: every setting + all binds")
-        AddLabel(g, "Click a config: pick, double: load")
-        AddLabel(g, "Enter in the name field: save")
         EndGroup(g)
 
         local bgc = cfg.bg
@@ -14940,6 +17880,9 @@ local function BuildMenu()
     -- its own size. Columns follow their kind: left / right split the page in two, "fill"
     -- (the Players page) takes whatever is right of its x.
     local GRIP = 14
+    -- groups dragged somewhere else last time go back there
+    for _, page in ipairs(pages) do ANIM.GrpApply(page) end
+
     local grip = vgui.Create("Panel", frame)
     grip:SetSize(GRIP, GRIP)
     grip:SetPos(W - GRIP, H - GRIP)
@@ -15359,8 +18302,9 @@ do
 
     -- cfg table + key -> short name; movement first, anything else only with "all binds"
     local SHORT = {
-        {cfg.move, "edgebug", "eb"}, {cfg.move, "ebSteer", "aeb"}, {cfg.move, "texturebug", "tb"},
-        {cfg.move, "wallhang", "wh"}, {cfg.move, "pixelsurf", "ps"}, {cfg.move, "minijump", "mj"}, {cfg.move, "longjump", "lj"}, {cfg.aa, "fakelag", "fl"}, {cfg.move, "airstuck", "stuck"},
+        {cfg.move, "edgebug", "eb"}, {cfg.move, "ebSteer", "aeb"}, {cfg.move, "edgeskip", "es"},
+        {cfg.move, "fireman", "fm"}, {cfg.move, "texturebug", "tb"},
+        {cfg.move, "wallhang", "wh"}, {cfg.move, "pixelsurf", "ps"}, {cfg.move, "psHelper", "psh"}, {cfg.move, "minijump", "mj"}, {cfg.move, "longjump", "lj"}, {cfg.aa, "fakelag", "fl"}, {cfg.move, "airstuck", "stuck"},
         {cfg.move, "bhop", "bhop"}, {cfg.move, "autostrafe", "as"},
         {cfg.move, "circle", "cs"},
     }
@@ -16456,6 +19400,12 @@ local function Unload()
     concommand.Remove("nyx_model")
 
     -- module: no choke / hold left behind, the net channel's own vtable back
+    if istable(ded) then
+        pcall(ded.SetBSendPacket, true)
+        pcall(ded.SetInterpolation, true)
+        pcall(ded.SetSequenceInterpolation, true)
+        pcall(ded.EnableAnimFix, false)
+    end
     if istable(nyxmod) then
         pcall(nyxmod.SetChoke, 0)
         pcall(nyxmod.SetHold, false, 1)
@@ -16496,6 +19446,9 @@ local function Unload()
         if IsValid(ply) then ply:SetEyeAngles(realAng) end
         silentDirty = false
     end
+
+    -- the rain's looping sound would keep playing without its Think hook
+    if MV.rain and MV.rain.snd then MV.rain.snd:Stop() end
 
     NyxUnload = nil
 end
