@@ -164,6 +164,7 @@ local cfg = {
         r = 255, g = 255, b = 255, -- box / text colour
         dormant     = true,        -- keep drawing players that left the PVS, at their last position
         dormantTime = 8,           -- seconds they stay visible, fading out
+        iconStyle   = "auto",      -- item icon: auto (kill icon, else spawn icon) | kill | spawn
     },
     -- ESP layout (the ESP editor window): the side of the box each element sits on and its
     -- place in that side's stack (1 = next to the box); side "off" = not drawn
@@ -175,6 +176,7 @@ local cfg = {
         armor    = {side = "off",    order = 2},
         weapon   = {side = "bottom", order = 1},
         distance = {side = "bottom", order = 2},
+        icon     = {side = "bottom", order = 3},
         ammo     = {side = "off",    order = 3},
         ammobar  = {side = "off",    order = 4},
         job      = {side = "off",    order = 5},
@@ -194,6 +196,7 @@ local cfg = {
         armor    = {r = 110, g = 170, b = 255, auto = false},
         weapon   = {r = 255, g = 255, b = 255, auto = true},
         distance = {r = 255, g = 255, b = 255, auto = true},
+        icon     = {r = 255, g = 255, b = 255, auto = false},
         ammo     = {r = 255, g = 220, b = 120, auto = false},
         ammobar  = {r = 255, g = 200, b = 60,  auto = false},
         job      = {r = 200, g = 200, b = 255, auto = false},
@@ -296,6 +299,8 @@ local cfg = {
         glow       = false,        -- halo through walls
         maxDist    = 2000,         -- metres
         fullbright = false,
+        fbSky      = true,         -- with fullbright: the sky turns a bright, even blue
+        fbSkyR = 70, fbSkyG = 165, fbSkyB = 255,
         noFog      = false,
         -- custom fog
         fogOn      = false,
@@ -8302,6 +8307,7 @@ function ESPL.Data(v, metres, dormant)
         local wep = v:GetActiveWeapon()
         if IsValid(wep) then
             d.weapon = WeaponName(v) or "-"
+            d.icon = wep:GetClass()             -- resolved to a picture by ESPL.Icon
             local clip, maxClip = wep:Clip1(), wep:GetMaxClip1()
             if clip >= 0 and maxClip > 0 then
                 d.ammo = clip .. " / " .. v:GetAmmoCount(wep:GetPrimaryAmmoType())
@@ -8343,6 +8349,62 @@ function ESPL.Color(id, base, d)
         return Color(255 * (1 - d.hpFrac), 255 * d.hpFrac, 0, base.a)
     end
     return base
+end
+
+-- Item icon: the picture of a weapon class, cached per class and style. "kill" is the weapon's
+-- kill icon (the silhouette the kill feed shows: HL2 weapons and most addon bases register one),
+-- shrunk to 14 px high; "spawn" its spawn menu icon (materials/entities/<class>.png, square);
+-- "auto" the kill icon when there is one, else the spawn icon. Neither: the class as text.
+ESPL.iconCache = {}
+ESPL.ICON_H = 14
+
+function ESPL.Icon(class)
+    local style = cfg.esp.iconStyle or "auto"
+    local key = style .. ":" .. class
+    local r = ESPL.iconCache[key]
+    if r then return r end
+
+    if style ~= "spawn" and killicon.Exists(class) then
+        local kw, kh = killicon.GetSize(class)
+        if kw and kh and kh > 0 then
+            local s = ESPL.ICON_H / kh
+            r = {kind = "kill", name = class, s = s, kh = kh, w = math.ceil(kw * s), h = ESPL.ICON_H}
+        end
+    end
+
+    if not r and style ~= "kill" then
+        local mat = Material("entities/" .. class .. ".png", "smooth")
+        if mat and not mat:IsError() then r = {kind = "spawn", mat = mat, w = 20, h = 20} end
+    end
+
+    if not r then
+        surface.SetFont("KiwibebraESP")
+        local tw = surface.GetTextSize(class)
+        r = {kind = "text", text = class, w = tw, h = 12}
+    end
+
+    ESPL.iconCache[key] = r
+    return r
+end
+
+-- draws an icon from ESPL.Icon centred on (cx, cy)
+function ESPL.IconDraw(r, cx, cy, col, outline)
+    if r.kind == "kill" then
+        -- killicon.Draw has no size: drawn through a scale matrix (multiplied onto the current
+        -- one, so it also lands right inside a panel's Paint - the ESP editor)
+        local m = Matrix()
+        m:Translate(Vector(cx, cy, 0))
+        m:Scale(Vector(r.s, r.s, 1))
+        cam.PushModelMatrix(m, true)
+        killicon.Draw(0, -r.kh * 0.4, r.name, col.a)   -- it puts the top ~0.1 h above y
+        cam.PopModelMatrix()
+    elseif r.kind == "spawn" then
+        surface.SetMaterial(r.mat)
+        surface.SetDrawColor(col.r, col.g, col.b, col.a)
+        surface.DrawTexturedRect(cx - r.w / 2, cy - r.h / 2, r.w, r.h)
+    else
+        draw.SimpleTextOutlined(r.text, "KiwibebraESP", cx, cy, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, outline)
+    end
 end
 
 -- the side an element is on (an old switch that is off counts as "off")
@@ -8412,6 +8474,11 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
                 surface.DrawRect(x, by + 1, math.floor(w * val), 2)
                 Rec(e.id, x - 1, by, w + 2, 4)
                 off = off + 5
+            elseif e.kind == "icon" then
+                local r = ESPL.Icon(val)
+                ESPL.IconDraw(r, x + w / 2, y - off - r.h / 2, col, outline)
+                Rec(e.id, x + w / 2 - r.w / 2, y - off - r.h, r.w, r.h)
+                off = off + r.h + 1
             else
                 local lines, maxW = Lines(e, val), 0
                 for i = #lines, 1, -1 do
@@ -8437,6 +8504,11 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
                 surface.DrawRect(x, by + 1, math.floor(w * val), 2)
                 Rec(e.id, x - 1, by, w + 2, 4)
                 off = off + 5
+            elseif e.kind == "icon" then
+                local r = ESPL.Icon(val)
+                ESPL.IconDraw(r, x + w / 2, y + h + off + r.h / 2, col, outline)
+                Rec(e.id, x + w / 2 - r.w / 2, y + h + off, r.w, r.h)
+                off = off + r.h + 1
             else
                 local lines, maxW = Lines(e, val), 0
                 local top = y + h + off
@@ -8474,7 +8546,14 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
         local tx = edge + dir * (barOff + 1)
         for _, e in ipairs(sides[side]) do
             local val = d[e.id]
-            if val ~= nil and e.kind ~= "bar" then
+            if val ~= nil and e.kind == "icon" then
+                local col = ESPL.Color(e.id, base, d)
+                local r = ESPL.Icon(val)
+                local left = side == "left" and tx - r.w or tx
+                ESPL.IconDraw(r, left + r.w / 2, textY + r.h / 2, col, outline)
+                Rec(e.id, left, textY, r.w, r.h)
+                textY = textY + r.h + 1
+            elseif val ~= nil and e.kind ~= "bar" then
                 local col = ESPL.Color(e.id, base, d)
                 local lines, maxW = Lines(e, val), 0
                 local top = textY
@@ -8631,6 +8710,17 @@ AddHook("PreRender", "fullbright", function()
     if cfg.world.fullbright and not IsHidden() then
         render.SetLightingMode(1)
     end
+end)
+
+-- The lighting mode must be back to normal before anything 2D is drawn: left on through the
+-- post-processing and the HUD it turned the HUD black and made the screen flicker. The 3D world
+-- and the viewmodel are drawn by then, so they stay fullbright.
+AddHook("RenderScreenspaceEffects", "fullbright", function()
+    render.SetLightingMode(0)
+end)
+
+AddHook("PreDrawHUD", "fullbright", function()
+    render.SetLightingMode(0)
 end)
 
 AddHook("PostRender", "fullbright", function()
@@ -9164,13 +9254,21 @@ AddHook("RenderScreenspaceEffects", "timescreen", function()
 end)
 
 -- solid colour sky: the engine's sky is skipped and the screen cleared with the colour instead,
--- which works on every map whatever the sky is made of
+-- which works on every map whatever the sky is made of. Fullbright brings its own bright blue
+-- sky the same way (the solid colour wins when both are on).
 AddHook("PreDrawSkyBox", "skysolid", function()
     local w = cfg.world
-    if not w.skySolid or IsHidden() then return end
+    if IsHidden() then return end
 
-    render.Clear(w.solidR, w.solidG, w.solidB, 255)
-    return true
+    if w.skySolid then
+        render.Clear(w.solidR, w.solidG, w.solidB, 255)
+        return true
+    end
+
+    if w.fullbright and w.fbSky then
+        render.Clear(w.fbSkyR, w.fbSkyG, w.fbSkyB, 255)
+        return true
+    end
 end)
 
 WL.Force = ForceWorldLook
@@ -18091,7 +18189,10 @@ local function BuildMenu()
 
         -- entity ESP / glow live on the Entities tab
         g = NewGroup(right, "World")
-        AddCheck(g, "Fullbright", w, "fullbright")
+        AddCheck(g, "Fullbright", w, "fullbright", function(p)
+            AddCheck(p, "Bright blue sky", w, "fbSky")
+            AddColor(p, "Sky color", w, "fbSkyR", "fbSkyG", "fbSkyB")
+        end)
         AddCheck(g, "Night mode", w, "night", function(p)
             AddSlider(p, "Darkness", w, "nightAmount", 0.1, 0.95, 2)
             AddCheck(p, "Dim the screen too", w, "nightScreen")
