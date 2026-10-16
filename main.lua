@@ -14722,6 +14722,23 @@ local function ResetConfig()
     ClearBinds()
 end
 
+-- Startup: config_1 is the main config. Its file is loaded every time the cheat loads (settings
+-- and binds), so whatever was last saved into it is what you start with; without the file the
+-- built-in defaults stay. "Reset all to defaults" still goes to the built-in ones.
+do
+    local MAIN_CONFIG = "config_1"
+
+    if file.Exists(ConfigPath(MAIN_CONFIG), "DATA") then
+        local ok, why = LoadConfig(MAIN_CONFIG)
+        if ok then
+            selected = MAIN_CONFIG
+            configStatus = "loaded " .. MAIN_CONFIG .. " (main config)"
+        else
+            configStatus = MAIN_CONFIG .. ": " .. tostring(why)
+        end
+    end
+end
+
 -- The name field. Typing goes into a DTextEntry made a popup and laid over the field (the menu
 -- keeps its keyboard off so WASD works, so an entry inside it would never keep the focus).
 -- Enter saves under the name.
