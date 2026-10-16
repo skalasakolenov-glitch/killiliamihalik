@@ -707,7 +707,7 @@ local cfg = {
     },
 }
 
--- Built-in defaults: config_1 (saved 2026-10-17 00:16). Its values are laid over the table above when
+-- Built-in defaults: config_1 (saved 2026-10-17 02:28). Its values are laid over the table above when
 -- the file loads, before anything copies cfg - so a fresh start, "Reset all to defaults" and
 -- "Reset group layout" all come back to it. Only keys that exist above with the same type are
 -- taken (the same rule as loading a config), so a setting added later keeps its own default.
@@ -816,15 +816,15 @@ do
 			"g": 97
 		},
 		"killfx": {
-			"burst": false,
+			"burst": true,
 			"scale": 1,
 			"count": 36,
 			"b": 255,
 			"life": 2,
-			"souls": false,
-			"dsCount": 280,
+			"souls": true,
+			"dsCount": 800,
 			"g": 255,
-			"ghost": false,
+			"ghost": true,
 			"fireworks": false,
 			"banner": false,
 			"rainbow": false,
@@ -833,15 +833,15 @@ do
 			"pillar": false,
 			"sparks": false,
 			"dome": false,
-			"dsTint": true,
-			"flash": false,
+			"dsTint": false,
+			"flash": true,
 			"dsBeam": false,
 			"ring": false,
-			"vortex": false,
+			"vortex": true,
 			"dsHide": true,
 			"text": false,
 			"disint": true,
-			"scorch": false,
+			"scorch": true,
 			"shake": false,
 			"bolt": false,
 			"sound": "off",
@@ -973,6 +973,10 @@ do
 				"side": "right",
 				"order": 1
 			},
+			"icon": {
+				"side": "off",
+				"order": 3
+			},
 			"money": {
 				"side": "off",
 				"order": 3
@@ -1015,7 +1019,7 @@ do
 			},
 			"distance": {
 				"side": "bottom",
-				"order": 4
+				"order": 3
 			},
 			"name": {
 				"side": "top",
@@ -1023,15 +1027,15 @@ do
 			},
 			"weapon": {
 				"side": "bottom",
-				"order": 3
+				"order": 2
 			}
 		},
 		"espc": {
 			"flags": {
 				"r": 255,
 				"auto": false,
-				"b": 70,
-				"g": 190
+				"b": 255,
+				"g": 255
 			},
 			"money": {
 				"r": 120,
@@ -1039,9 +1043,15 @@ do
 				"b": 120,
 				"g": 255
 			},
+			"icon": {
+				"r": 255,
+				"auto": false,
+				"b": 255,
+				"g": 255
+			},
 			"name": {
 				"r": 255,
-				"auto": true,
+				"auto": false,
 				"b": 255,
 				"g": 255
 			},
@@ -1094,14 +1104,14 @@ do
 				"g": 120
 			},
 			"job": {
-				"r": 200,
+				"r": 255,
 				"auto": false,
 				"b": 255,
-				"g": 200
+				"g": 255
 			},
 			"distance": {
 				"r": 255,
-				"auto": true,
+				"auto": false,
 				"b": 255,
 				"g": 255
 			},
@@ -1113,7 +1123,7 @@ do
 			},
 			"weapon": {
 				"r": 255,
-				"auto": true,
+				"auto": false,
 				"b": 255,
 				"g": 255
 			}
@@ -1124,11 +1134,11 @@ do
 			"yPct": 22
 		},
 		"menu": {
-			"x": 950,
+			"x": 1071,
 			"anim": true,
-			"w": 934,
-			"y": 194,
-			"h": 1246,
+			"w": 730,
+			"y": 256,
+			"h": 637,
 			"layout": "{\"tab4\":{\"right\":[\"Camera\",\"Viewmodel\",\"Removals\",\"World\",\"Rain\",\"Kill effects\",\"Glow\"],\"left\":[\"Players\",\"Chams\",\"Tracers\",\"Hits\",\"Crosshair indicators\",\"Custom model\"]}}",
 			"speed": 0.8
 		},
@@ -1146,8 +1156,8 @@ do
 		"view": {
 			"fovOn": false,
 			"fov": 105,
-			"aspect": 1.49,
-			"aspectOn": false,
+			"aspect": 1.63,
+			"aspectOn": true,
 			"thirdperson": false,
 			"distance": 90,
 			"height": 0,
@@ -1181,8 +1191,8 @@ do
 			"npc": true,
 			"item": true,
 			"weapon": true,
-			"timeOn": false,
-			"timeHour": 1,
+			"timeOn": true,
+			"timeHour": 5.7,
 			"skyPicBright": 1,
 			"other": true,
 			"skyPicFile": "",
@@ -1325,6 +1335,7 @@ do
 			"bindScale": 1
 		},
 		"esp": {
+			"iconStyle": "auto",
 			"hpHideFull": false,
 			"health": true,
 			"hpG": 255,
@@ -1449,15 +1460,15 @@ do
 			"selfAlpha": 200,
 			"handG": 140,
 			"players": true,
-			"material": "crystal",
-			"visR": 148,
-			"hidG": 111,
-			"hidR": 111,
+			"material": "fresnel",
+			"visR": 72,
+			"hidG": 255,
+			"hidR": 216,
 			"selfB": 255,
 			"selfR": 90,
-			"visB": 148,
+			"visB": 58,
 			"handAlpha": 254,
-			"hidB": 111,
+			"hidB": 191,
 			"teamCheck": false,
 			"edit": "players",
 			"weapon": false,
@@ -1466,9 +1477,9 @@ do
 			"hands": false,
 			"handMaterial": "glow",
 			"alpha": 254,
-			"enabled": false,
+			"enabled": true,
 			"throughWalls": true,
-			"visG": 148
+			"visG": 255
 		},
 		"netlog": {
 			"incoming": false,
@@ -1544,7 +1555,22 @@ do
 		}
 	},
 	"version": 1,
-	"binds": []
+	"binds": [
+		{
+			"t": "view",
+			"code": 109,
+			"name": "Third person",
+			"mode": "toggle",
+			"k": "thirdperson"
+		},
+		{
+			"t": "rage",
+			"code": 111,
+			"name": "Enabled",
+			"mode": "hold",
+			"k": "enabled"
+		}
+	]
 }
 ]==]
 
@@ -1561,6 +1587,10 @@ do
 
     local t = util.JSONToTable(DEFAULT_CONFIG)
     if istable(t) and istable(t.cfg) then Lay(cfg, t.cfg) end
+
+    -- its binds are put on once the bind system exists (configs block); kept on addedHooks
+    -- under a name key, which the unload's ipairs never visits (the main chunk has no locals left)
+    addedHooks.defaultBinds = istable(t) and istable(t.binds) and t.binds or {}
 end
 
 -- Anti-target list ("friends"): players the aimbots never pick. Keyed by SteamID64 (the nick for
@@ -14717,27 +14747,26 @@ local function LoadConfig(name)
     return true
 end
 
-local function ResetConfig()
-    MergeInto(cfg, defaultCfg)
-    ClearBinds()
-end
-
--- Startup: config_1 is the main config. Its file is loaded every time the cheat loads (settings
--- and binds), so whatever was last saved into it is what you start with; without the file the
--- built-in defaults stay. "Reset all to defaults" still goes to the built-in ones.
-do
-    local MAIN_CONFIG = "config_1"
-
-    if file.Exists(ConfigPath(MAIN_CONFIG), "DATA") then
-        local ok, why = LoadConfig(MAIN_CONFIG)
-        if ok then
-            selected = MAIN_CONFIG
-            configStatus = "loaded " .. MAIN_CONFIG .. " (main config)"
-        else
-            configStatus = MAIN_CONFIG .. ": " .. tostring(why)
+-- the built-in config's binds (config_1's), the same way LoadConfig puts a config's binds on
+local function DefaultBinds()
+    for _, b in ipairs(addedHooks.defaultBinds or {}) do
+        local tbl = cfg[b.t]
+        if istable(tbl) and tbl[b.k] ~= nil and isnumber(b.code) and isstring(b.mode) then
+            local e = GetBind(tbl, b.k, true)
+            e.code, e.mode = b.code, b.mode
+            e.name = isstring(b.name) and b.name or (b.t .. "." .. b.k)
         end
     end
 end
+
+local function ResetConfig()
+    MergeInto(cfg, defaultCfg)
+    ClearBinds()
+    DefaultBinds()
+end
+
+-- everyone starts with them, like with the built-in settings
+DefaultBinds()
 
 -- The name field. Typing goes into a DTextEntry made a popup and laid over the field (the menu
 -- keeps its keyboard off so WASD works, so an entry inside it would never keep the focus).
@@ -20625,3 +20654,4 @@ AddHook("Think", "keys", function()
 
     findWasDown = findDown
 end)
+
