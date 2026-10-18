@@ -165,6 +165,7 @@ local cfg = {
         dormant     = true,        -- keep drawing players that left the PVS, at their last position
         dormantTime = 8,           -- seconds they stay visible, fading out
         iconStyle   = "auto",      -- item icon: auto (kill icon, else spawn icon) | kill | spawn
+        avatarRound = 0,           -- avatar corner radius, px (half the size = a circle)
     },
     -- ESP layout (the ESP editor window): the side of the box each element sits on and its
     -- place in that side's stack (1 = next to the box); side "off" = not drawn
@@ -184,6 +185,7 @@ local cfg = {
         ping     = {side = "off",    order = 7},
         money    = {side = "off",    order = 8},
         flags    = {side = "right",  order = 1},
+        avatar   = {side = "left",   order = 0},
     },
     -- ESP colours per element; auto = the ESP colour (team / friend / dormant), and for the
     -- health bar / number the green .. red of the health
@@ -204,6 +206,7 @@ local cfg = {
         ping     = {r = 180, g = 180, b = 180, auto = false},
         money    = {r = 120, g = 255, b = 120, auto = false},
         flags    = {r = 255, g = 190, b = 70,  auto = false},
+        avatar   = {r = 255, g = 255, b = 255, auto = true},
     },
     view = {
         thirdperson = false,
@@ -394,7 +397,6 @@ local cfg = {
         burstRate = 10,            -- cl_cmdrate while bursting
         netCount  = 10,            -- net mode: gRust.Interact messages sent in one frame
         netWait   = 1.0,           -- net mode: seconds before the same bag gets another burst
-        doorDupe  = false,         -- V: gRust.ToggleDoor at every bag
     },
     netlog = {                     -- logs the net messages you send (to see what a menu really sends)
         enabled  = false,
@@ -855,7 +857,6 @@ do
 			"mode": "rate",
 			"aim": true,
 			"netCount": 10,
-			"doorDupe": false,
 			"enabled": false,
 			"burstRate": 10,
 			"range": 80
@@ -6736,21 +6737,6 @@ function BAG.NetRun(ply)
     end
 end
 
--- door-toggle dupe
-hook.Add("PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂", function(ply, button)
-    if not cfg.bagspam.doorDupe then return end
-    if button == KEY_V then
-        for _, bag in pairs(ents.FindByClass("rust_itembag")) do
-            if IsValid(bag) then
-                net.Start("gRust.ToggleDoor")
-                    net.WriteEntity(bag)
-                net.SendToServer()
-            end
-        end
-    end
-end)
-addedHooks[#addedHooks + 1] = {"PlayerButtonDown", "😂😂😂🤣🤣🤣🤣🤣🤣🙂🙂🙂🙂"}
-
 -- kiwibebra_interact_burst [n]: one burst at whatever you are looking at, any class (for testing)
 concommand.Add("kiwibebra_interact_burst", function(ply, cmd, args)
     local me = LocalPlayer()
@@ -7186,7 +7172,7 @@ local function Build()
     end)
 
     -- sends a recorded outgoing message again, value for value (works with the logger off too)
-    function NETLOG.Replay(m, times)
+    function NETLOG.Replay(m, times, quiet)
         if not m then return false, "no such record" end
         if m.dir ~= "out" then return false, "only sent messages can be replayed" end
 
@@ -7205,8 +7191,40 @@ local function Build()
 
         replayOf = nil
         local msg = ok and string.format("sent %s x%d", m.name, times) or tostring(err)
-        print("[kiwibebra net] replay #" .. m.id .. ": " .. msg)
+        if not quiet then print("[kiwibebra net] replay #" .. m.id .. ": " .. msg) end
         return ok, msg
+    end
+
+    -- repeat: the record sent again every `interval` seconds until NETLOG.StopLoop (the same
+    -- button pressed a second time, unload, or the first send that fails). One loop at a time.
+    NETLOG.loop = nil
+
+    function NETLOG.StopLoop()
+        local l = NETLOG.loop
+        timer.Remove(ID .. "netloop")
+        NETLOG.loop = nil
+        if l then return "stopped repeating #" .. l.m.id .. " after " .. l.n .. " sends" end
+    end
+
+    function NETLOG.StartLoop(m, times, interval)
+        if not m or m.dir ~= "out" then return false, "only sent messages can be replayed" end
+        NETLOG.StopLoop()
+
+        local l = {m = m, n = 0}
+        NETLOG.loop = l
+        timer.Create(ID .. "netloop", math.max(interval or 0.1, 0), 0, function()
+            local ok, msg = NETLOG.Replay(m, times, true)
+            if not ok then
+                NETLOG.StopLoop()
+                W.msg = "repeat stopped: " .. msg
+                print("[kiwibebra net] repeat #" .. m.id .. " stopped: " .. msg)
+                return
+            end
+            l.n = l.n + 1
+        end)
+
+        print("[kiwibebra net] repeating #" .. m.id .. " (" .. m.name .. ") every " .. math.max(interval or 0.1, 0) .. "s")
+        return true, "repeating " .. m.name .. " (#" .. m.id .. "), press again to stop"
     end
 
     -- the newest sent message that isn't itself a replay
@@ -7506,6 +7524,15 @@ local function Build()
                 function() NETLOG.ToggleIgnore(m.name) end)
             if m.dir == "out" then
                 dm:AddOption("Replay", function() local _, msg = NETLOG.Replay(m, 1); W.msg = msg end)
+                if NETLOG.loop and NETLOG.loop.m == m then
+                    dm:AddOption("Stop repeating", function() W.msg = NETLOG.StopLoop() end)
+                else
+                    dm:AddOption("Repeat until pressed again", function()
+                        local ms = IsValid(W.interval) and W.interval:GetValue() or 100
+                        local _, msg = NETLOG.StartLoop(m, 1, ms / 1000)
+                        W.msg = msg
+                    end)
+                end
             end
             dm:Open()
         end
@@ -7530,6 +7557,52 @@ local function Build()
             local m = Selected(true)
             if m then local _, msg = NETLOG.Replay(m, times:GetValue()); W.msg = msg end
         end)
+
+        -- first press: the selected record is sent (x the count on the left) every N ms;
+        -- second press: stops. The label follows the loop, also when it stopped by itself.
+        local interval
+        local loopBtn = Button(actions, "Repeat", LEFT, function()
+            if NETLOG.loop then
+                W.msg = NETLOG.StopLoop()
+                return
+            end
+            local m = Selected(true)
+            if m then
+                local _, msg = NETLOG.StartLoop(m, times:GetValue(), interval:GetValue() / 1000)
+                W.msg = msg
+            end
+        end)
+        local basePaint = loopBtn.Paint
+        loopBtn.Paint = function(s, w, h)
+            basePaint(s, w, h)
+            if NETLOG.loop then
+                surface.SetDrawColor(COL.accent)
+                surface.DrawOutlinedRect(0, 0, w, h)
+            end
+        end
+        loopBtn.Think = function(s)
+            local t = NETLOG.loop and ("Stop repeat #" .. NETLOG.loop.m.id .. " (" .. NETLOG.loop.n .. ")") or "Repeat"
+            if s:GetText() ~= t then
+                s:SetText(t)
+                s:SizeToContentsX(18)
+            end
+        end
+
+        interval = vgui.Create("DNumberWang", actions)
+        interval:Dock(LEFT)
+        interval:DockMargin(4, 0, 0, 0)
+        interval:SetWide(56)
+        interval:SetMinMax(0, 5000)
+        interval:SetValue(100)
+        W.interval = interval
+
+        local ms = vgui.Create("DLabel", actions)
+        ms:Dock(LEFT)
+        ms:DockMargin(4, 0, 6, 0)
+        ms:SetText("ms")
+        ms:SetTextColor(COL.dim)
+        ms:SizeToContents()
+
         Button(actions, "Copy as Lua", LEFT, function()
             local m = Selected()
             if m then CopyLua(m) end
@@ -8293,6 +8366,7 @@ local ESPL = {
         {id = "armorbar", label = "Armor Bar",  kind = "bar"},
         {id = "armor",    label = "Armor",      kind = "text"},
         {id = "weapon",   label = "Weapon",     kind = "text"},
+        {id = "icon",     label = "Item Icon",  kind = "icon"},
         {id = "ammo",     label = "Ammo",       kind = "text"},
         {id = "ammobar",  label = "Ammo Bar",   kind = "bar"},
         {id = "distance", label = "Distance",   kind = "text"},
@@ -8301,12 +8375,14 @@ local ESPL = {
         {id = "ping",     label = "Ping",       kind = "text"},
         {id = "money",    label = "Money",      kind = "text"},
         {id = "flags",    label = "Flags",      kind = "flags"},
+        {id = "avatar",   label = "Avatar",     kind = "avatar"},
     },
     LEGACY = {box = "box", name = "name", hpbar = "health", hp = "hpText", weapon = "weapon", distance = "distance"},
     FAKE = {
         name = "kiwibebra", hpbar = 0.76, hp = "76", hpFrac = 0.76, armorbar = 0.5, armor = "50 ar",
         weapon = "AK-47", ammo = "24 / 90", ammobar = 0.8, distance = "12m", job = "Citizen",
         group = "admin", ping = "35ms", money = "$12,500", flags = {"duck", "target"},
+        icon = "weapon_ar2", avatar = "preview",
     },
 }
 ESPL.BYID = {}
@@ -8320,6 +8396,10 @@ for _, e in ipairs(ESPL.ELEMENTS) do ESPL.BYID[e.id] = e end
 function ESPL.Data(v, metres, dormant)
     local esp = cfg.esp
     local d = {name = v:Nick(), distance = math.floor(metres) .. "m"}
+
+    if v:IsPlayer() and not v:IsBot() then
+        d.avatar = v                                -- resolved to a panel by ESPL.Avatar
+    end
 
     if not dormant then
         local hp = v:Health()
@@ -8437,6 +8517,142 @@ function ESPL.IconDraw(r, cx, cy, col, outline)
     end
 end
 
+-- Avatar: the player's Steam profile picture, through GMod's own "AvatarImage" panel - the same
+-- one the Tab scoreboard uses, so it resolves the exact same picture the exact same way instead
+-- of a hand-rolled steamworks.RequestPlayerAvatar/GetPlayerAvatar poll. One panel per SteamID64,
+-- never parented into the tree (so it's never actually "on screen" anywhere); ESPL.AvatarDraw
+-- repositions it and calls PaintManual() wherever the ESP wants it drawn this frame. The panel
+-- itself handles the download, the retry and the fallback icon for a player with no avatar.
+ESPL.avatarPanels = {}
+ESPL.AVATAR_SIZE = 20
+
+function ESPL.Avatar(val)
+    if val == "preview" then                        -- ESP editor: no player, just a placeholder
+        return {kind = "placeholder", w = ESPL.AVATAR_SIZE, h = ESPL.AVATAR_SIZE}
+    end
+
+    if not IsValid(val) or not val:IsPlayer() then return nil end
+
+    local ok, steamid = pcall(val.SteamID64, val)
+    if not ok or not steamid or steamid == "0" then return nil end
+
+    local p = ESPL.avatarPanels[steamid]
+    if not IsValid(p) then
+        local ok2, panel = pcall(vgui.Create, "AvatarImage")
+        if not ok2 or not IsValid(panel) then return nil end
+        -- vgui.Create with no parent lands on the world panel, which the engine paints on its
+        -- own every frame at the last SetPos: that's what left avatars frozen on screen
+        panel:SetPaintedManually(true)
+        -- never moved again: VGUI updates a panel's absolute position and clip rect once per
+        -- frame, so a panel moved with SetPos right before PaintManual got clipped against where
+        -- it was last frame and vanished while the camera turned. ESPL.AvatarDraw moves the
+        -- drawing with a matrix instead.
+        panel:SetPos(0, 0)
+        panel:SetSize(ESPL.AVATAR_SIZE, ESPL.AVATAR_SIZE)
+        panel:SetMouseInputEnabled(false)
+        panel:SetKeyboardInputEnabled(false)
+        pcall(panel.SetPlayer, panel, val, 64)
+        p = panel
+        ESPL.avatarPanels[steamid] = p
+    end
+
+    return {kind = "panel", panel = p, w = ESPL.AVATAR_SIZE, h = ESPL.AVATAR_SIZE}
+end
+
+-- convex rounded square for surface.DrawPoly, clockwise (screen y points down)
+function ESPL.RoundedPoly(x, y, s, rad)
+    local pts = {}
+    local seg = math.max(2, math.ceil(rad / 2))
+    local corners = {
+        {x + s - rad, y + rad,     -90},
+        {x + s - rad, y + s - rad,   0},
+        {x + rad,     y + s - rad,  90},
+        {x + rad,     y + rad,     180},
+    }
+    for _, c in ipairs(corners) do
+        for i = 0, seg do
+            local a = math.rad(c[3] + 90 * i / seg)
+            pts[#pts + 1] = {x = c[1] + math.cos(a) * rad, y = c[2] + math.sin(a) * rad}
+        end
+    end
+    return pts
+end
+
+function ESPL.AvatarDraw(r, cx, cy, col)
+    local s = ESPL.AVATAR_SIZE
+    local x, y = math.floor(cx - s / 2), math.floor(cy - s / 2)
+    local rad = math.Clamp(math.floor(cfg.esp.avatarRound or 0), 0, s / 2)
+
+    if r.kind == "placeholder" then
+        if rad > 0 then
+            draw.NoTexture()
+            surface.SetDrawColor(col.r, col.g, col.b, col.a)
+            surface.DrawPoly(ESPL.RoundedPoly(x, y, s, rad))
+            surface.SetDrawColor(COL_BOXBG.r, COL_BOXBG.g, COL_BOXBG.b, col.a)
+            surface.DrawPoly(ESPL.RoundedPoly(x + 1, y + 1, s - 2, math.max(rad - 1, 0)))
+        else
+            surface.SetDrawColor(COL_BOXBG.r, COL_BOXBG.g, COL_BOXBG.b, col.a)
+            surface.DrawRect(x, y, s, s)
+            surface.SetDrawColor(col.r, col.g, col.b, col.a)
+            surface.DrawOutlinedRect(x, y, s, s, 1)
+        end
+        return
+    end
+
+    local p = r.panel
+    if not IsValid(p) then return end
+    surface.SetAlphaMultiplier(col.a / 255)
+
+    local function Paint()
+        local m = Matrix()
+        m:Translate(Vector(x, y, 0))
+        local prevClip = DisableClipping(true)
+        cam.PushModelMatrix(m, true)
+        p:PaintManual()
+        cam.PopModelMatrix()
+        DisableClipping(prevClip == true)
+    end
+
+    if rad <= 0 then
+        Paint()
+    else
+        -- the rounded square goes into the stencil only (no colour), the avatar is then drawn
+        -- where the stencil was written
+        render.ClearStencil()
+        render.SetStencilEnable(true)
+        render.SetStencilWriteMask(0xFF)
+        render.SetStencilTestMask(0xFF)
+        render.SetStencilReferenceValue(1)
+        render.SetStencilCompareFunction(STENCIL_ALWAYS)
+        render.SetStencilPassOperation(STENCIL_REPLACE)
+        render.SetStencilFailOperation(STENCIL_KEEP)
+        render.SetStencilZFailOperation(STENCIL_KEEP)
+
+        render.OverrideColorWriteEnable(true, false)
+        draw.NoTexture()
+        surface.SetDrawColor(255, 255, 255, 255)
+        surface.DrawPoly(ESPL.RoundedPoly(x, y, s, rad))
+        render.OverrideColorWriteEnable(false, false)
+
+        render.SetStencilCompareFunction(STENCIL_EQUAL)
+        render.SetStencilPassOperation(STENCIL_KEEP)
+        Paint()
+        render.SetStencilEnable(false)
+    end
+
+    surface.SetAlphaMultiplier(1)
+end
+
+-- a disconnected player's panel is useless weight (it keeps polling Steam for nothing); dropped
+-- the moment they leave instead of waiting for the whole table to be forgotten some other way
+AddHook("PlayerDisconnected", "espavatarcleanup", function(ply)
+    local ok, steamid = pcall(ply.SteamID64, ply)
+    if not ok or not steamid then return end
+    local p = ESPL.avatarPanels[steamid]
+    if IsValid(p) then p:Remove() end
+    ESPL.avatarPanels[steamid] = nil
+end)
+
 -- the side an element is on (an old switch that is off counts as "off")
 function ESPL.Side(id)
     if id == "box" then return cfg.esp.box and "box" or "off" end
@@ -8509,6 +8725,13 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
                 ESPL.IconDraw(r, x + w / 2, y - off - r.h / 2, col, outline)
                 Rec(e.id, x + w / 2 - r.w / 2, y - off - r.h, r.w, r.h)
                 off = off + r.h + 1
+            elseif e.kind == "avatar" then
+                local r = ESPL.Avatar(val)
+                if r then
+                    ESPL.AvatarDraw(r, x + w / 2, y - off - r.h / 2, col)
+                    Rec(e.id, x + w / 2 - r.w / 2, y - off - r.h, r.w, r.h)
+                    off = off + r.h + 1
+                end
             else
                 local lines, maxW = Lines(e, val), 0
                 for i = #lines, 1, -1 do
@@ -8539,6 +8762,13 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
                 ESPL.IconDraw(r, x + w / 2, y + h + off + r.h / 2, col, outline)
                 Rec(e.id, x + w / 2 - r.w / 2, y + h + off, r.w, r.h)
                 off = off + r.h + 1
+            elseif e.kind == "avatar" then
+                local r = ESPL.Avatar(val)
+                if r then
+                    ESPL.AvatarDraw(r, x + w / 2, y + h + off + r.h / 2, col)
+                    Rec(e.id, x + w / 2 - r.w / 2, y + h + off, r.w, r.h)
+                    off = off + r.h + 1
+                end
             else
                 local lines, maxW = Lines(e, val), 0
                 local top = y + h + off
@@ -8583,6 +8813,15 @@ function ESPL.Draw(x, y, w, h, d, base, outline, hits)
                 ESPL.IconDraw(r, left + r.w / 2, textY + r.h / 2, col, outline)
                 Rec(e.id, left, textY, r.w, r.h)
                 textY = textY + r.h + 1
+            elseif val ~= nil and e.kind == "avatar" then
+                local col = ESPL.Color(e.id, base, d)
+                local r = ESPL.Avatar(val)
+                if r then
+                    local left = side == "left" and tx - r.w or tx
+                    ESPL.AvatarDraw(r, left + r.w / 2, textY + r.h / 2, col)
+                    Rec(e.id, left, textY, r.w, r.h)
+                    textY = textY + r.h + 1
+                end
             elseif val ~= nil and e.kind ~= "bar" then
                 local col = ESPL.Color(e.id, base, d)
                 local lines, maxW = Lines(e, val), 0
@@ -13236,6 +13475,9 @@ function ESPL.OpenElementMenu(f, id)
     if id == "hp" then
         AddCheck(p, "As percent", cfg.esp, "hpPercent")
         AddCheck(p, "Hide at full HP", cfg.esp, "hpHideFull")
+    elseif id == "avatar" then
+        cfg.esp.avatarRound = cfg.esp.avatarRound or 0
+        AddSlider(p, "Corner rounding", cfg.esp, "avatarRound", 0, ESPL.AVATAR_SIZE / 2, 0, "px")
     end
 
     if ESPL.Side(id) == "off" then
@@ -18512,7 +18754,6 @@ local function BuildMenu()
             AddLabel(p, "Class: console  kiwibebra_bag_class <class>")
             AddLabel(p, "(default rust_itembag)")
         end)
-        AddCheck(g, "Door-toggle dupe (V)", bs, "doorDupe")
         EndGroup(g)
 
         local nl, log = cfg.netlog, BAG.Log
@@ -20600,6 +20841,7 @@ local function Unload()
     concommand.Remove("kiwibebra_dump_lua_dir")
     concommand.Remove("kiwibebra_interact_burst")
     timer.Remove(ID .. "killsay")
+    timer.Remove(ID .. "netloop")
     concommand.Remove("kiwibebra_killsay")
     concommand.Remove("kiwibebra_bag_class")
     concommand.Remove("kiwibebra_config_save")
@@ -20612,6 +20854,11 @@ local function Unload()
 
     ClosePopup()
     if IsValid(menu) then menu:Remove() end
+
+    for steamid, p in pairs(ESPL.avatarPanels) do
+        if IsValid(p) then p:Remove() end
+        ESPL.avatarPanels[steamid] = nil
+    end
 
     -- don't leave an injected angle sitting in the engine view
     if silentDirty then
